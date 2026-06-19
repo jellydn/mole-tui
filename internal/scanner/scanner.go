@@ -161,6 +161,10 @@ func Scan(ctx context.Context, sudo bool) (ScanResult, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// Check for context cancellation before wrapping
+		if ctx.Err() != nil {
+			return ScanResult{}, ctx.Err()
+		}
 		errOutput := strings.TrimSpace(stderr.String())
 		if errOutput == "" {
 			errOutput = err.Error()
