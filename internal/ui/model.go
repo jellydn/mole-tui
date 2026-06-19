@@ -57,10 +57,12 @@ type Model struct {
 	hasPrevScan bool
 
 	// Dashboard
-	cursor     int
-	expanded   map[int]bool
-	sudoBanner bool
-	errorMsg   string
+	cursor           int
+	expanded         map[int]bool
+	sudoBanner       bool
+	errorMsg         string
+	dashboardVP      viewport.Model
+	dashboardContent string // cached rendered content
 
 	// Confirmation modal
 	confirmDryRun bool
@@ -189,6 +191,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.logVP = viewport.New(max(0, msg.Width-4), max(0, msg.Height-8))
+		m.dashboardVP = viewport.New(max(0, msg.Width-4), max(0, msg.Height-6))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -367,7 +370,22 @@ func (m *Model) dashboardView() string {
 	b.WriteString(footerStyle.Render(
 		"↑/k ↓/j  •  tab toggle  •  enter clean  •  r rescan  •  S sudo  •  ? help  •  q quit"))
 
-	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	content := b.String()
+	m.dashboardVP.SetContent(content)
+	m.dashboardContent = content
+
+	// Auto-scroll viewport to keep cursor visible
+	if m.dashboardVP.Height > 0 {
+		topLine := m.dashboardVP.YOffset
+		botLine := topLine + m.dashboardVP.Height - 1
+		if m.cursor < topLine {
+			m.dashboardVP.YOffset = m.cursor
+		} else if m.cursor >= botLine {
+			m.dashboardVP.YOffset = m.cursor - m.dashboardVP.Height + 1
+		}
+	}
+
+	return lipgloss.NewStyle().Padding(1, 2).Render(m.dashboardVP.View())
 }
 
 func styleItemLine(line string) string {
