@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ type Model struct {
 	spinner     spinner.Model
 	loadingMsg  string
 	loadingTime time.Time
+	scanCancel  context.CancelFunc
 
 	// Scan results
 	scanResult  scanner.ScanResult
@@ -121,6 +123,8 @@ type scanCompleteMsg struct {
 	err    error
 }
 
+type scanCancelledMsg struct{}
+
 type cleanupCompleteMsg struct {
 	result cleanup.Result
 	err    error
@@ -144,15 +148,18 @@ func NewModel(dryRun bool) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, scanCmd(false))
+	ctx, cancel := context.WithCancel(context.Background())
+	m.scanCancel = cancel
+	return tea.Batch(m.spinner.Tick, m.scanCmd(ctx, false))
 }
 
-// scanCmd returns a tea.Cmd that runs `mo clean --dry-run` with optional sudo.
-func scanCmd(sudo bool) tea.Cmd {
+// scanCmd returns a tea.Cmd that runs `mo clean --dry-run` with the given ctx.
+func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 		result, err := scanner.Scan(ctx, sudo)
+		if errors.Is(err, context.Canceled) {
+			return scanCancelledMsg{}
+		}
 		return scanCompleteMsg{result: result, err: err}
 	}
 }
@@ -214,6 +221,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expanded[i] = false
 			}
 		}
+		m.scanCancel = nil
+		return m, nil
+
+	case scanCancelledMsg:
+		m.scanCancel = nil
+		if m.hasPrevScan {
+			m.screen = screenDashboard
+		} else {
+			m.loadingMsg = "Scan cancelled"
+		}
 		return m, nil
 
 	case cleanupCompleteMsg:
@@ -269,11 +286,19 @@ func (m *Model) loadingView() string {
 func (m *Model) handleLoadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, loadingKeys.Esc):
+		if m.scanCancel != nil {
+			m.scanCancel()
+		}
 		if m.hasPrevScan {
 			m.screen = screenDashboard
+		} else {
+			m.loadingMsg = "Cancelling…"
 		}
 		return m, nil
 	case key.Matches(msg, loadingKeys.Quit):
+		if m.scanCancel != nil {
+			m.scanCancel()
+		}
 		return m, tea.Quit
 	}
 	return m, nil
@@ -385,12 +410,16 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.screen = screenLoading
 			m.loadingMsg = "Re-scanning…"
 			m.loadingTime = time.Now()
-			return m, scanCmd(false)
+			ctx, cancel := context.WithCancel(context.Background())
+			m.scanCancel = cancel
+			return m, m.scanCmd(ctx, false)
 		case key.Matches(msg, dashboardKeys.Sudo):
 			m.screen = screenLoading
 			m.loadingMsg = "Re-scanning with sudo…"
 			m.loadingTime = time.Now()
-			return m, scanCmd(true)
+			ctx, cancel := context.WithCancel(context.Background())
+			m.scanCancel = cancel
+			return m, m.scanCmd(ctx, true)
 		case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
 			m.prevScreen = m.screen
 			m.helpScreen = screenDashboard
@@ -429,12 +458,16 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenLoading
 		m.loadingMsg = "Re-scanning…"
 		m.loadingTime = time.Now()
-		return m, scanCmd(false)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.scanCancel = cancel
+		return m, m.scanCmd(ctx, false)
 	case key.Matches(msg, dashboardKeys.Sudo):
 		m.screen = screenLoading
 		m.loadingMsg = "Re-scanning with sudo…"
 		m.loadingTime = time.Now()
-		return m, scanCmd(true)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.scanCancel = cancel
+		return m, m.scanCmd(ctx, true)
 	case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
 		m.prevScreen = m.screen
 		m.helpScreen = screenDashboard
