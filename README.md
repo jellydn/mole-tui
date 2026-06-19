@@ -8,7 +8,7 @@ A keyboard-driven TUI that orchestrates [Mole](https://github.com/tw93/mole) (`m
 - [Mole CLI](https://github.com/tw93/mole) (`mo`) on `$PATH`
 
 ```bash
-brew install mo
+brew install mole
 ```
 
 ## Install

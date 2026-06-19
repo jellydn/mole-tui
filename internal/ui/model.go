@@ -376,6 +376,30 @@ func (m *Model) visibleLineCount() int {
 }
 
 func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Guard: no sections means nothing to navigate
+	if len(m.scanResult.Sections) == 0 {
+		// Only allow rescan, sudo, help, and quit
+		switch {
+		case key.Matches(msg, dashboardKeys.Rescan):
+			m.screen = screenLoading
+			m.loadingMsg = "Re-scanning…"
+			m.loadingTime = time.Now()
+			return m, scanCmd(false)
+		case key.Matches(msg, dashboardKeys.Sudo):
+			m.screen = screenLoading
+			m.loadingMsg = "Re-scanning with sudo…"
+			m.loadingTime = time.Now()
+			return m, scanCmd(true)
+		case key.Matches(msg, dashboardKeys.Help):
+			m.prevScreen = m.screen
+			m.helpScreen = screenDashboard
+			m.screen = screenHelp
+		case key.Matches(msg, dashboardKeys.Quit):
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	switch {
 	case key.Matches(msg, dashboardKeys.Up):
 		if m.cursor > 0 {
@@ -426,9 +450,11 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) confirmView() string {
 	content := "Run cleanup command?\n\n"
-	content += fmt.Sprintf("  Command: mo clean\n")
+	content += "  Command: mo clean\n"
 	if m.confirmDryRun {
-		content += fmt.Sprintf("  [DRY RUN] — no files will be modified\n")
+		content += "  [DRY RUN] — no files will be modified\n"
+	} else {
+		content += "  (may prompt for sudo password)\n"
 	}
 	content += fmt.Sprintf("  Reclaimable: %s\n", formatBytes(m.scanResult.Summary.TotalReclaimable))
 	content += fmt.Sprintf("\n  y — confirm  •  n/esc — cancel  •  q — quit")
