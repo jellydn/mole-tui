@@ -1,0 +1,41 @@
+
+Clean Your Mac
+
+Dry Run Mode, Preview only, no deletions
+
+◎ System caches need sudo, run sudo -v && mo clean --dry-run for full preview
+
+⚙ Apple Silicon | Free space: 105.27GB
+✓ Whitelist: 21 core patterns active
+  ↳ /Users/huynhdung/Library/Caches/ms-playwright*
+  ↳ /Users/huynhdung/.cache/huggingface*
+  ↳ /Users/huynhdung/.m2/repository/*
+  ↳ /Users/huynhdung/.gradle/caches/*
+  ↳ /Users/huynhdung/.gradle/daemon/*
+  ↳ /Users/huynhdung/.ollama/models/*
+  ↳ /Users/huynhdung/Library/Caches/com.nssurge.surge-mac/*
+  ↳ /Users/huynhdung/Library/Application Support/com.nssurge.surge-mac/*
+  ↳ /Users/huynhdung/Library/Caches/org.R-project.R/R/renv/*
+  ↳ /Users/huynhdung/Library/Caches/pypoetry/virtualenvs*
+  ↳ /Users/huynhdung/Library/Caches/JetBrains*
+  ↳ /Users/huynhdung/Library/Caches/com.jetbrains.toolbox*
+  ↳ /Users/huynhdung/Library/Caches/tealdeer/tldr-pages
+  ↳ /Users/huynhdung/Library/Application Support/JetBrains*
+  ↳ /Users/huynhdung/Library/Caches/com.apple.finder
+  ↳ /Users/huynhdung/Library/Mobile Documents*
+  ↳ /Users/huynhdung/Library/Caches/com.apple.FontRegistry*
+  ↳ /Users/huynhdung/Library/Caches/com.apple.spotlight*
+  ↳ /Users/huynhdung/Library/Caches/com.apple.Spotlight*
+  ↳ /Users/huynhdung/Library/Caches/CloudKit*
+
+➤ User essentials
+  → User app cache 100 items, 481.6MB dry
+  → User app logs 16 items, 4KB dry
+  → Darwin user cache files, 241 old items, 331KB dry
+  ✓ Trash · already empty
+
+➤ App caches
+  → Media analysis temp files, 0B dry
+  → Geod temp files, 0B dry
+  → Maps geo tile cache 2 items, 1KB dry
+  → Apple Media Services cache 2 items, 119KB dry
