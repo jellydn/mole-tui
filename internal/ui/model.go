@@ -227,10 +227,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanCancel = nil
 		if m.hasPrevScan {
 			m.screen = screenDashboard
-		} else {
-			m.loadingMsg = "Scan cancelled"
+			return m, nil
 		}
-		return m, nil
+		return m, tea.Quit
 
 	case cleanupCompleteMsg:
 		m.logDone = true
@@ -286,14 +285,13 @@ func (m *Model) handleLoadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, loadingKeys.Esc):
 		if m.scanCancel != nil {
+			// Cancel the running scan
 			m.scanCancel()
-		}
-		if m.hasPrevScan {
-			m.screen = screenDashboard
-		} else {
 			m.loadingMsg = "Cancelling…"
+			return m, nil
 		}
-		return m, nil
+		// No active scan — quit
+		return m, tea.Quit
 	case key.Matches(msg, loadingKeys.Quit):
 		if m.scanCancel != nil {
 			m.scanCancel()
