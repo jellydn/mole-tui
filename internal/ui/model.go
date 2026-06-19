@@ -86,6 +86,7 @@ var (
 		Rescan: key.NewBinding(key.WithKeys("r")),
 		Sudo:   key.NewBinding(key.WithKeys("S")),
 		Help:   key.NewBinding(key.WithKeys("?")),
+		Esc:    key.NewBinding(key.WithKeys("esc")),
 		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	}
 
@@ -390,7 +391,7 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadingMsg = "Re-scanning with sudo…"
 			m.loadingTime = time.Now()
 			return m, scanCmd(true)
-		case key.Matches(msg, dashboardKeys.Help):
+		case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
 			m.prevScreen = m.screen
 			m.helpScreen = screenDashboard
 			m.screen = screenHelp
@@ -434,7 +435,7 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loadingMsg = "Re-scanning with sudo…"
 		m.loadingTime = time.Now()
 		return m, scanCmd(true)
-	case key.Matches(msg, dashboardKeys.Help):
+	case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
 		m.prevScreen = m.screen
 		m.helpScreen = screenDashboard
 		m.screen = screenHelp
