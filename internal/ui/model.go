@@ -420,7 +420,9 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			ctx, cancel := context.WithCancel(context.Background())
 			m.scanCancel = cancel
 			return m, m.scanCmd(ctx, true)
-		case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
+		case key.Matches(msg, dashboardKeys.Esc):
+			return m, tea.Quit
+		case key.Matches(msg, dashboardKeys.Help):
 			m.prevScreen = m.screen
 			m.helpScreen = screenDashboard
 			m.screen = screenHelp
@@ -468,7 +470,9 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.scanCancel = cancel
 		return m, m.scanCmd(ctx, true)
-	case key.Matches(msg, dashboardKeys.Esc), key.Matches(msg, dashboardKeys.Help):
+	case key.Matches(msg, dashboardKeys.Esc):
+		return m, tea.Quit
+	case key.Matches(msg, dashboardKeys.Help):
 		m.prevScreen = m.screen
 		m.helpScreen = screenDashboard
 		m.screen = screenHelp
