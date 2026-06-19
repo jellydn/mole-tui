@@ -88,7 +88,6 @@ var (
 		Rescan: key.NewBinding(key.WithKeys("r")),
 		Sudo:   key.NewBinding(key.WithKeys("S")),
 		Help:   key.NewBinding(key.WithKeys("?")),
-		Esc:    key.NewBinding(key.WithKeys("esc")),
 		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	}
 
@@ -420,8 +419,6 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			ctx, cancel := context.WithCancel(context.Background())
 			m.scanCancel = cancel
 			return m, m.scanCmd(ctx, true)
-		case key.Matches(msg, dashboardKeys.Esc):
-			return m, tea.Quit
 		case key.Matches(msg, dashboardKeys.Help):
 			m.prevScreen = m.screen
 			m.helpScreen = screenDashboard
@@ -470,8 +467,6 @@ func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.scanCancel = cancel
 		return m, m.scanCmd(ctx, true)
-	case key.Matches(msg, dashboardKeys.Esc):
-		return m, tea.Quit
 	case key.Matches(msg, dashboardKeys.Help):
 		m.prevScreen = m.screen
 		m.helpScreen = screenDashboard
