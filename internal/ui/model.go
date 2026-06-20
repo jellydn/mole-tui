@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/jellydn/mole-tui/internal/cleanup"
 	"github.com/jellydn/mole-tui/internal/scanner"
@@ -190,11 +190,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		m.logVP = viewport.New(max(0, msg.Width-4), max(0, msg.Height-8))
-		m.dashboardVP = viewport.New(max(0, msg.Width-4), max(0, msg.Height-6))
+		m.logVP = viewport.New(
+			viewport.WithWidth(max(0, msg.Width-4)),
+			viewport.WithHeight(max(0, msg.Height-8)),
+		)
+		m.dashboardVP = viewport.New(
+			viewport.WithWidth(max(0, msg.Width-4)),
+			viewport.WithHeight(max(0, msg.Height-6)),
+		)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
 	case spinner.TickMsg:
@@ -255,7 +261,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenLoading:
 		return m.handleLoadingKey(msg)
@@ -284,7 +290,7 @@ func (m *Model) loadingView() string {
 		lipgloss.Center, lipgloss.Center, content)
 }
 
-func (m *Model) handleLoadingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleLoadingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, loadingKeys.Esc):
 		if m.scanCancel != nil {
@@ -375,13 +381,13 @@ func (m *Model) dashboardView() string {
 	m.dashboardContent = content
 
 	// Auto-scroll viewport to keep cursor visible
-	if m.dashboardVP.Height > 0 {
-		topLine := m.dashboardVP.YOffset
-		botLine := topLine + m.dashboardVP.Height - 1
+	if m.dashboardVP.Height() > 0 {
+		topLine := m.dashboardVP.YOffset()
+		botLine := topLine + m.dashboardVP.Height() - 1
 		if m.cursor < topLine {
-			m.dashboardVP.YOffset = m.cursor
+			m.dashboardVP.SetYOffset(m.cursor)
 		} else if m.cursor >= botLine {
-			m.dashboardVP.YOffset = m.cursor - m.dashboardVP.Height + 1
+			m.dashboardVP.SetYOffset(m.cursor - m.dashboardVP.Height() + 1)
 		}
 	}
 
@@ -416,7 +422,7 @@ func (m *Model) visibleLineCount() int {
 	return n
 }
 
-func (m *Model) handleDashboardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Guard: no sections means nothing to navigate
 	if len(m.scanResult.Sections) == 0 {
 		// Only allow rescan, sudo, help, and quit
@@ -513,7 +519,7 @@ func (m *Model) confirmView() string {
 		modalStyle.Render(content))
 }
 
-func (m *Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, confirmKeys.Confirm):
 		m.screen = screenLog
@@ -521,7 +527,7 @@ func (m *Model) handleConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.logDone = false
 		m.logExit = 0
 		m.logSummary = ""
-		if m.logVP.Height > 0 {
+		if m.logVP.Height() > 0 {
 			m.logVP.SetContent("")
 		}
 		return m, cleanupCmd(m.DryRun)
@@ -597,15 +603,15 @@ func (m *Model) logView() string {
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
-func (m *Model) handleLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleLogKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, logKeys.Up):
 		if m.logDone {
-			m.logVP.LineUp(1)
+			m.logVP.ScrollUp(1)
 		}
 	case key.Matches(msg, logKeys.Down):
 		if m.logDone {
-			m.logVP.LineDown(1)
+			m.logVP.ScrollDown(1)
 		}
 	case key.Matches(msg, logKeys.Enter):
 		if m.logDone {
@@ -694,7 +700,7 @@ func helpEntriesFor(s Screen) []helpEntry {
 	}
 }
 
-func (m *Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHelpKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, dashboardKeys.Help),
 		key.Matches(msg, confirmKeys.Cancel):
@@ -707,23 +713,26 @@ func (m *Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
+	v := tea.NewView("")
+	v.AltScreen = true
 	if !m.ready {
-		return "mole-tui — loading…"
+		v.SetContent("mole-tui — loading…")
+		return v
 	}
 	switch m.screen {
 	case screenLoading:
-		return m.loadingView()
+		v.SetContent(m.loadingView())
 	case screenDashboard:
-		return m.dashboardView()
+		v.SetContent(m.dashboardView())
 	case screenConfirm:
-		return m.confirmView()
+		v.SetContent(m.confirmView())
 	case screenLog:
-		return m.logView()
+		v.SetContent(m.logView())
 	case screenHelp:
-		return m.helpView()
+		v.SetContent(m.helpView())
 	}
-	return ""
+	return v
 }
 
 // -------------------------------------------------------
