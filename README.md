@@ -50,11 +50,18 @@ make install
 ## 🎮 Usage
 
 ```bash
-mole-tui           # launch TUI — scans and shows cleanup dashboard
-mole-tui --dry-run # simulate cleanup (no files modified)
-mole-tui -n        # same as --dry-run
-mole-tui --version # print version
+mole-tui                # launch TUI — scans and shows cleanup dashboard
+mole-tui --dry-run      # simulate cleanup (no files modified)
+mole-tui -n             # alias for --dry-run
+mole-tui --version      # print version and exit
 ```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` / `-n` | Run in dry-run mode (simulate cleanup, no files modified) |
+| `--version` | Print version and exit |
 
 ### Keybindings
 
