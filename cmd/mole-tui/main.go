@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/jellydn/mole-tui/internal/ui"
 )
@@ -38,10 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(
-		ui.NewModel(dryRunMode),
-		tea.WithAltScreen(),
-	)
+	p := tea.NewProgram(ui.NewModel(dryRunMode))
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
