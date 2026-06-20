@@ -1,4 +1,4 @@
-module github.com/tw93/mole-tui
+module github.com/jellydn/mole-tui
 
 go 1.26.4
 

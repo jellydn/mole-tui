@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/tw93/mole-tui/internal/ui"
+	"github.com/jellydn/mole-tui/internal/ui"
 )
 
 // version is injected at build time via -ldflags.

@@ -5,7 +5,7 @@ A keyboard-driven TUI that orchestrates [`mole`](https://github.com/tw93/mole) C
 ## Stack
 
 - Go 1.22+, Bubble Tea v1, Lip Gloss v1, Bubbles v1. No CGO.
-- Module: `github.com/tw93/mole-tui`
+- Module: `github.com/jellydn/mole-tui`
 
 ## Entrypoint & Layout (PRD-locked)
 

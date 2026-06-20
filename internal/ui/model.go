@@ -17,8 +17,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/tw93/mole-tui/internal/cleanup"
-	"github.com/tw93/mole-tui/internal/scanner"
+	"github.com/jellydn/mole-tui/internal/cleanup"
+	"github.com/jellydn/mole-tui/internal/scanner"
 )
 
 // Screen represents the current UI screen.

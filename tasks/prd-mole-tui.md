@@ -132,7 +132,7 @@ The goal is to give terminal-first power users (macOS, Linux, SSH) a discoverabl
 
 **Acceptance Criteria:**
 
-- [ ] `go install github.com/tw93/mole-tui/cmd/mole-tui@latest` produces a working `mole-tui` binary on `$GOBIN`.
+- [ ] `go install github.com/jellydn/mole-tui/cmd/mole-tui@latest` produces a working `mole-tui` binary on `$GOBIN`.
 - [ ] `make install` does the same for users who prefer Make.
 - [ ] `mole-tui --version` prints the build version.
 - [ ] `mole-tui --dry-run` runs the full UI without executing `mo clean` (ADR-011).
@@ -141,7 +141,7 @@ The goal is to give terminal-first power users (macOS, Linux, SSH) a discoverabl
 
 ## 4. Functional Requirements
 
-- **FR-1:** The TUI must be a single Go module at `github.com/tw93/mole-tui` with a `cmd/mole-tui` entrypoint and 3 internal packages: `scanner`, `cleanup`, `ui` (ADR-008).
+- **FR-1:** The TUI must be a single Go module at `github.com/jellydn/mole-tui` with a `cmd/mole-tui` entrypoint and 3 internal packages: `scanner`, `cleanup`, `ui` (ADR-008).
 - **FR-2:** `scanner` must invoke `mo clean --dry-run`, parse section headers (`➤`) into `[]Section{Name, Lines}`, aggregate a best-effort total reclaimable size, and detect the sudo-needed banner. A `context.Context` must bound the run; cancellation must stop the subprocess within 1s (ADR-001, ADR-003, ADR-012).
 - **FR-3:** `cleanup` must invoke `mo clean` (no item arguments — all-or-nothing) via `os/exec`, streaming stdout/stderr to the UI. It must support a `DryRun` mode that short-circuits execution (ADR-002, ADR-011).
 - **FR-4:** The UI must be implemented with Bubble Tea + Lip Gloss + Bubbles. 5 screens: Loading, Dashboard, Confirmation (modal), Log/Report, Help (ADR-010).
