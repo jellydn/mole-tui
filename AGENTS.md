@@ -4,7 +4,7 @@ A keyboard-driven TUI that orchestrates [`mole`](https://github.com/tw93/mole) C
 
 ## Stack
 
-- Go 1.22+, Bubble Tea v1, Lip Gloss v1, Bubbles v1. No CGO.
+- Go 1.26+, Bubble Tea v2, Lip Gloss v2, Bubbles v2. No CGO.
 - Module: `github.com/jellydn/mole-tui`
 
 ## Entrypoint & Layout (PRD-locked)
@@ -56,7 +56,7 @@ Run manually: `pre-commit run --all-files`
 ## Build quirks
 
 - Version injected via `-ldflags '-X main.version=<VERSION>'`.
-- Binary: `./bin/mole-tui` (always to `bin/`, gitignored? — no `.gitignore` exists yet).
+- Binary: `./bin/mole-tui` (always to `bin/`, gitignored in `.gitignore`).
 - TUI relies on `mo` CLI being on `$PATH` at runtime. No fallback.
 
 ## Constraints

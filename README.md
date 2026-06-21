@@ -24,7 +24,7 @@ Navigate, inspect, and reclaim disk space — all from the terminal. No clicking
 
 ## 🛠️ Prerequisites
 
-- [Go](https://go.dev) 1.22+
+- [Go](https://go.dev) 1.26+
 - [Mole CLI](https://github.com/tw93/mole) (`mo`) on `$PATH`
 
 ```bash
