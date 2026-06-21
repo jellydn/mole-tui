@@ -228,7 +228,11 @@ func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
 	go func() {
 		scanner := bufio.NewScanner(pr)
 		for scanner.Scan() {
-			stream <- cleanupStreamMsg{line: scanner.Text() + "\n"}
+			select {
+			case stream <- cleanupStreamMsg{line: scanner.Text()}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -305,7 +309,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case cleanupStreamMsg:
-		m.logContent += msg.line
+		m.logContent += msg.line + "\n"
 		m.logVP.SetContent(m.logContent)
 		m.logVP.GotoBottom()
 		return m, m.readCleanupStreamCmd()
