@@ -576,25 +576,27 @@ func (m *Model) confirmView() string {
 		modalStyle.Render(content))
 }
 
+// startCleanup transitions to the log screen and kicks off a cleanup run
+// with a cancellable context. Mirrors startScan for consistency.
+func (m *Model) startCleanup() tea.Cmd {
+	m.screen = screenLog
+	m.logContent = ""
+	m.logDone = false
+	m.logExit = 0
+	m.logSummary = ""
+	m.quitConfirm = false
+	if m.logVP.Height() > 0 {
+		m.logVP.SetContent("")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cleanupCancel = cancel
+	return m.cleanupCmd(ctx)
+}
+
 func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, confirmKeys.Confirm):
-		m.screen = screenLog
-		m.logContent = ""
-		m.logDone = false
-		m.logExit = 0
-		m.logSummary = ""
-		m.quitConfirm = false
-		if m.logVP.Height() > 0 {
-			m.logVP.SetContent("")
-		}
-		// Carry sudo intent from the last scan into cleanup (ADR-005)
-		if m.lastScanSudo {
-			m.DryRun = m.confirmDryRun
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cleanupCancel = cancel
-		return m, m.cleanupCmd(ctx)
+		return m, m.startCleanup()
 	case key.Matches(msg, confirmKeys.Cancel):
 		m.screen = screenDashboard
 	case key.Matches(msg, confirmKeys.Quit):
