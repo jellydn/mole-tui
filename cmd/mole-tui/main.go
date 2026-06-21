@@ -28,8 +28,9 @@ func main() {
 	// Combine --dry-run and -n
 	dryRunMode := *dryRun || *dryRunShort
 
-	// Check for mo binary before starting the TUI
-	if _, err := exec.LookPath("mo"); err != nil {
+	// Resolve the absolute mo path for safety and display
+	moPath, err := exec.LookPath("mo")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[1;31mError:\033[0m mo is not on $PATH\n")
 		fmt.Fprintf(os.Stderr, "\n")
 		fmt.Fprintf(os.Stderr, "mole-tui requires the \033[1mmo\033[0m CLI from Mole:\n")
@@ -38,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.NewModel(dryRunMode))
+	p := tea.NewProgram(ui.NewModel(dryRunMode, moPath))
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

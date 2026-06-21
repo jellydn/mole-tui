@@ -10,7 +10,7 @@ import (
 func TestRunDryRun(t *testing.T) {
 	ctx := context.Background()
 	var buf bytes.Buffer
-	result, err := Run(ctx, Options{DryRun: true}, &buf)
+	result, err := Run(ctx, Options{DryRun: true}, &buf, "mo")
 	if err != nil {
 		t.Fatalf("Run with DryRun failed: %v", err)
 	}

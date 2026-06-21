@@ -145,15 +145,14 @@ func Parse(output string) ScanResult {
 }
 
 // Scan invokes `mo clean --dry-run` (with optional sudo elevation) and returns
-// the parsed result. The context controls cancellation / timeout.
-func Scan(ctx context.Context, sudo bool) (ScanResult, error) {
+// the parsed result. moPath should be the resolved absolute path of the mo
+// binary (from exec.LookPath). The context controls cancellation / timeout.
+func Scan(ctx context.Context, moPath string, sudo bool) (ScanResult, error) {
 	var cmd *exec.Cmd
 	if sudo {
-		// sudo -v refreshes the credential cache; actual command is mo clean --dry-run
-		// We combine them so the TUI only needs to manage one subprocess.
-		cmd = exec.CommandContext(ctx, "sudo", "sh", "-c", "mo clean --dry-run")
+		cmd = exec.CommandContext(ctx, "sudo", moPath, "clean", "--dry-run")
 	} else {
-		cmd = exec.CommandContext(ctx, "mo", "clean", "--dry-run")
+		cmd = exec.CommandContext(ctx, moPath, "clean", "--dry-run")
 	}
 
 	var stdout, stderr bytes.Buffer

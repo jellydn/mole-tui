@@ -16,6 +16,8 @@ import (
 type Options struct {
 	// DryRun short-circuits execution with a canned success message.
 	DryRun bool
+	// Sudo enables elevated execution via sudo.
+	Sudo bool
 }
 
 // Result holds the post-cleanup information.
@@ -29,12 +31,14 @@ type Result struct {
 // reFreed matches lines like "Total freed: 22.8 GB" or "22.8GB freed".
 var reFreed = regexp.MustCompile(`(?i)(?:freed|cleaned|saved|reclaimed)\s*(?::)?\s*([0-9.]+\s*(?:KB|MB|GB|B))`)
 
-// Run executes `mo clean` with the given options. Output is written to writer
-// as it arrives (for live streaming). Returns a Result with the full output.
+// Run executes `mo clean` with the given options. moPath should be the
+// resolved absolute path of the mo binary (from exec.LookPath). Output is
+// written to writer as it arrives (for live streaming). Returns a Result with
+// the full output.
 //
 // When DryRun is true, no command is executed — the writer receives a canned
 // message and the result indicates success.
-func Run(ctx context.Context, opts Options, writer io.Writer) (Result, error) {
+func Run(ctx context.Context, opts Options, writer io.Writer, moPath string) (Result, error) {
 	if opts.DryRun {
 		msg := "Dry run complete — no files were modified\n"
 		if _, err := io.WriteString(writer, msg); err != nil {
@@ -47,7 +51,12 @@ func Run(ctx context.Context, opts Options, writer io.Writer) (Result, error) {
 		}, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "mo", "clean")
+	var cmd *exec.Cmd
+	if opts.Sudo {
+		cmd = exec.CommandContext(ctx, "sudo", moPath, "clean")
+	} else {
+		cmd = exec.CommandContext(ctx, moPath, "clean")
+	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	// Tee stdout so we capture it while writing to the UI
