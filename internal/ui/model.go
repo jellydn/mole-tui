@@ -3,10 +3,12 @@
 package ui
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -36,6 +38,7 @@ const (
 type Model struct {
 	// Config
 	DryRun bool
+	MoPath string // resolved absolute path of mo binary
 
 	// Screen state
 	screen     Screen
@@ -57,24 +60,26 @@ type Model struct {
 	hasPrevScan bool
 
 	// Dashboard
-	cursor           int
-	expanded         map[int]bool
-	sudoBanner       bool
-	errorMsg         string
-	dashboardVP      viewport.Model
-	dashboardContent string // cached rendered content
+	cursor       int
+	expanded     map[int]bool
+	sudoBanner   bool
+	lastScanSudo bool // true if the most recent scan used sudo
+	errorMsg     string
+	dashboardVP  viewport.Model
 
 	// Confirmation modal
 	confirmDryRun bool
 
 	// Log/Report
-	logContent  string
-	logStderr   string
-	logVP       viewport.Model
-	logDone     bool
-	logExit     int
-	logSummary  string
-	quitConfirm bool // first ctrl+c during cleanup
+	logContent    string
+	logStderr     string
+	logVP         viewport.Model
+	logDone       bool
+	logExit       int
+	logSummary    string
+	quitConfirm   bool // first ctrl+c during cleanup
+	cleanupCancel context.CancelFunc
+	cleanupStream <-chan tea.Msg // streaming channel, set by cleanupCmd
 
 	// Help
 	helpKeys help.Model
@@ -126,19 +131,25 @@ type scanCompleteMsg struct {
 
 type scanCancelledMsg struct{}
 
+type cleanupStreamMsg struct {
+	line string
+}
+
 type cleanupCompleteMsg struct {
 	result cleanup.Result
 	err    error
 }
 
-// NewModel creates the root model.
-func NewModel(dryRun bool) *Model {
+// NewModel creates the root model. moPath is the resolved absolute path of
+// the mo binary (from exec.LookPath).
+func NewModel(dryRun bool, moPath string) *Model {
 	s := spinner.New()
 	s.Style = spinnerStyle
 	s.Spinner = spinner.Dot
 
 	return &Model{
 		DryRun:      dryRun,
+		MoPath:      moPath,
 		screen:      screenLoading,
 		spinner:     s,
 		loadingMsg:  "Scanning… this may take a few minutes",
@@ -148,16 +159,30 @@ func NewModel(dryRun bool) *Model {
 	}
 }
 
+// startScan transitions to the loading screen and kicks off a scan with the
+// given sudo intent and loading message. Records the sudo state so cleanup
+// can inherit it (ADR-005).
+func (m *Model) startScan(sudo bool, msg string) tea.Cmd {
+	m.screen = screenLoading
+	m.loadingMsg = msg
+	m.loadingTime = time.Now()
+	m.lastScanSudo = sudo
+	ctx, cancel := context.WithCancel(context.Background())
+	m.scanCancel = cancel
+	return m.scanCmd(ctx, sudo)
+}
+
 func (m *Model) Init() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.scanCancel = cancel
+	m.lastScanSudo = false
 	return tea.Batch(m.spinner.Tick, m.scanCmd(ctx, false))
 }
 
 // scanCmd returns a tea.Cmd that runs `mo clean --dry-run` with the given ctx.
 func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
 	return func() tea.Msg {
-		result, err := scanner.Scan(ctx, sudo)
+		result, err := scanner.Scan(ctx, m.MoPath, sudo)
 		if errors.Is(err, context.Canceled) {
 			return scanCancelledMsg{}
 		}
@@ -165,22 +190,60 @@ func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
 	}
 }
 
-// cleanupCmd returns a tea.Cmd that runs `mo clean` and captures all output.
-func cleanupCmd(dryRun bool) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		result, err := cleanup.Run(context.Background(), cleanup.Options{DryRun: dryRun}, &buf)
-		if err != nil && result.Stdout == "" && result.Stderr == "" {
-			// The error occurred before we got any output
-			buf.WriteString(fmt.Sprintf("Error: %s\n", err))
+// cleanupCmd creates the cleanup process, stores the stream on the model,
+// and returns a cmd that reads one message from the stream.
+func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
+	opts := cleanup.Options{DryRun: m.DryRun, Sudo: m.lastScanSudo}
+
+	// Dry-run: no subprocess, return canned message immediately.
+	if opts.DryRun {
+		m.cleanupStream = nil
+		return func() tea.Msg {
+			result, _ := cleanup.Run(ctx, opts, io.Discard, m.MoPath)
+			return cleanupCompleteMsg{result: result}
 		}
+	}
+
+	pr, pw := io.Pipe()
+	stream := make(chan tea.Msg, 256)
+	m.cleanupStream = stream
+
+	// Worker: run cleanup, tee output to both the pipe (for streaming) and
+	// a buffer (for the final result). When Run returns, close the pipe so
+	// the pump goroutine stops, then send the completion message.
+	go func() {
+		var buf bytes.Buffer
+		tee := io.MultiWriter(pw, &buf)
+		result, err := cleanup.Run(ctx, opts, tee, m.MoPath)
+		pw.Close()
+
 		result.Stdout = buf.String()
-		if dryRun {
-			result.FreedText = "Dry run complete — no files were modified"
-		} else if result.FreedText == "" {
+		if result.FreedText == "" {
 			result.FreedText = cleanup.ParseSummary(buf.String())
 		}
-		return cleanupCompleteMsg{result: result, err: err}
+		stream <- cleanupCompleteMsg{result: result, err: err}
+	}()
+
+	// Pump: read lines from the pipe and forward them as stream messages.
+	go func() {
+		scanner := bufio.NewScanner(pr)
+		for scanner.Scan() {
+			stream <- cleanupStreamMsg{line: scanner.Text() + "\n"}
+		}
+	}()
+
+	return m.readCleanupStreamCmd()
+}
+
+// readCleanupStreamCmd returns a tea.Cmd that reads one message from the
+// cleanup stream channel. Returns nil to stop chaining when the stream is
+// nil (cleanup completed or not started).
+func (m *Model) readCleanupStreamCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.cleanupStream == nil {
+			return nil
+		}
+		return <-m.cleanupStream
 	}
 }
 
@@ -222,6 +285,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scanErr = nil
 			m.errorMsg = ""
 			m.sudoBanner = msg.result.Summary.SystemCachesSkipped
+			// lastScanSudo is set by the caller (handleDashboardKey / startScan)
 			m.hasPrevScan = true
 			m.screen = screenDashboard
 			m.cursor = 0
@@ -240,11 +304,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 
+	case cleanupStreamMsg:
+		m.logContent += msg.line
+		m.logVP.SetContent(m.logContent)
+		m.logVP.GotoBottom()
+		return m, m.readCleanupStreamCmd()
+
 	case cleanupCompleteMsg:
 		m.logDone = true
 		m.logExit = msg.result.ExitCode
 		m.logSummary = msg.result.FreedText
 		m.logStderr = msg.result.Stderr
+		m.cleanupStream = nil
+		m.cleanupCancel = nil
 		if msg.err != nil {
 			m.logSummary = fmt.Sprintf("Error: %s", msg.err)
 			m.logExit = 1
@@ -378,7 +450,6 @@ func (m *Model) dashboardView() string {
 
 	content := b.String()
 	m.dashboardVP.SetContent(content)
-	m.dashboardContent = content
 
 	// Auto-scroll viewport to keep cursor visible
 	if m.dashboardVP.Height() > 0 {
@@ -428,19 +499,9 @@ func (m *Model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Only allow rescan, sudo, help, and quit
 		switch {
 		case key.Matches(msg, dashboardKeys.Rescan):
-			m.screen = screenLoading
-			m.loadingMsg = "Re-scanning…"
-			m.loadingTime = time.Now()
-			ctx, cancel := context.WithCancel(context.Background())
-			m.scanCancel = cancel
-			return m, m.scanCmd(ctx, false)
+			return m, m.startScan(false, "Re-scanning…")
 		case key.Matches(msg, dashboardKeys.Sudo):
-			m.screen = screenLoading
-			m.loadingMsg = "Re-scanning with sudo…"
-			m.loadingTime = time.Now()
-			ctx, cancel := context.WithCancel(context.Background())
-			m.scanCancel = cancel
-			return m, m.scanCmd(ctx, true)
+			return m, m.startScan(true, "Re-scanning with sudo…")
 		case key.Matches(msg, dashboardKeys.Help):
 			m.prevScreen = m.screen
 			m.helpScreen = screenDashboard
@@ -476,19 +537,9 @@ func (m *Model) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.screen = screenConfirm
 		m.confirmDryRun = m.DryRun
 	case key.Matches(msg, dashboardKeys.Rescan):
-		m.screen = screenLoading
-		m.loadingMsg = "Re-scanning…"
-		m.loadingTime = time.Now()
-		ctx, cancel := context.WithCancel(context.Background())
-		m.scanCancel = cancel
-		return m, m.scanCmd(ctx, false)
+		return m, m.startScan(false, "Re-scanning…")
 	case key.Matches(msg, dashboardKeys.Sudo):
-		m.screen = screenLoading
-		m.loadingMsg = "Re-scanning with sudo…"
-		m.loadingTime = time.Now()
-		ctx, cancel := context.WithCancel(context.Background())
-		m.scanCancel = cancel
-		return m, m.scanCmd(ctx, true)
+		return m, m.startScan(true, "Re-scanning with sudo…")
 	case key.Matches(msg, dashboardKeys.Help):
 		m.prevScreen = m.screen
 		m.helpScreen = screenDashboard
@@ -508,6 +559,8 @@ func (m *Model) confirmView() string {
 	content += "  Command: mo clean\n"
 	if m.confirmDryRun {
 		content += "  [DRY RUN] — no files will be modified\n"
+	} else if m.lastScanSudo {
+		content += "  [SUDO] — elevated from last scan\n"
 	} else {
 		content += "  (may prompt for sudo password)\n"
 	}
@@ -527,10 +580,17 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.logDone = false
 		m.logExit = 0
 		m.logSummary = ""
+		m.quitConfirm = false
 		if m.logVP.Height() > 0 {
 			m.logVP.SetContent("")
 		}
-		return m, cleanupCmd(m.DryRun)
+		// Carry sudo intent from the last scan into cleanup (ADR-005)
+		if m.lastScanSudo {
+			m.DryRun = m.confirmDryRun
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cleanupCancel = cancel
+		return m, m.cleanupCmd(ctx)
 	case key.Matches(msg, confirmKeys.Cancel):
 		m.screen = screenDashboard
 	case key.Matches(msg, confirmKeys.Quit):
@@ -626,8 +686,12 @@ func (m *Model) handleLogKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if !m.quitConfirm {
 			m.quitConfirm = true
-			// First press — warn, second press will quit
+			// First press — warn, second press kills the cleanup subprocess
 		} else {
+			if m.cleanupCancel != nil {
+				m.cleanupCancel()
+				m.cleanupCancel = nil
+			}
 			return m, tea.Quit
 		}
 	case key.Matches(msg, loadingKeys.Esc):
