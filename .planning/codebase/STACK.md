@@ -1,83 +1,74 @@
-# Technology Stack
+# STACK.md — Technology Stack
 
-**Analysis Date:** 2026-06-20
+> Mapped fresh on 2026-08-04.
 
-## Languages
+## Languages & Runtime
 
-**Primary:**
-- Go 1.26.4 module target - application code under `cmd/mole-tui/main.go` and `internal/`, declared by `go.mod`.
+| Layer | Choice | Notes |
+|-------|--------|-------|
+| Language | Go 1.26.4 | `go 1.26.4` in `go.mod`; requires Go 1.26+ toolchain |
+| Platform | macOS (primary), Linux (opportunistic) | Mole is macOS-first; Linux works where `mo` builds |
+| CGO | None | Pure Go, statically buildable with `-trimpath` |
 
-**Secondary:**
-- POSIX shell - build recipes use `/bin/sh` in `justfile` and `Makefile`.
-- YAML/JSON - pre-commit and dependency-update configuration in `.pre-commit-config.yaml` and `renovate.json`.
+## Module
 
-## Runtime
+- Module path: `github.com/jellydn/mole-tui`
+- Binary entrypoint: `cmd/mole-tui`
+- Internal packages: `scanner`, `cleanup`, `ui` (ADR-008)
 
-**Environment:**
-- Go toolchain targeting host OS/architecture; `go.mod` declares `go 1.26.4`, while the README prerequisite still says Go 1.22+ in `README.md`.
-- Terminal runtime for an interactive Bubble Tea TUI; startup creates a `tea.NewProgram` in `cmd/mole-tui/main.go`.
+## Direct Dependencies (`go.mod`)
 
-**Package Manager:**
-- Go modules - module path `github.com/jellydn/mole-tui` in `go.mod`.
-- Lockfile: present via `go.sum`.
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `charm.land/bubbletea/v2` | v2.0.7 | TUI runtime — Elm-style Cmd/Msg model |
+| `charm.land/bubbles/v2` | v2.1.0 | Widgets: `spinner`, `viewport`, `help`, `key` |
+| `charm.land/lipgloss/v2` | v2.0.4 | Styling — styles, adaptive colors, borders |
 
-## Frameworks
+> **Note:** Charm libs are imported from the `charm.land` vanity paths (not `github.com/charmbracelet`). The README's Stack table still says "v1 / github.com/charmbracelet" — **stale**, see CONCERNS.md.
 
-**Core:**
-- Bubble Tea `charm.land/bubbletea/v2` v2.0.7 - TUI runtime/program model used by `cmd/mole-tui/main.go` and `internal/ui/model.go`, declared in `go.mod`.
-- Bubbles `charm.land/bubbles/v2` v2.1.0 - TUI widgets for help, key bindings, spinner, and viewport in `internal/ui/model.go`, declared in `go.mod`.
-- Lip Gloss `charm.land/lipgloss/v2` v2.0.4 - terminal styling and layout in `internal/ui/styles.go` and `internal/ui/model.go`, declared in `go.mod`.
+## Indirect Dependencies
 
-**Testing:**
-- Go standard `testing` package - unit tests in `internal/scanner/scanner_test.go` and `internal/cleanup/cleanup_test.go`.
-- Test fixtures under `internal/scanner/testdata/` are read by parser tests in `internal/scanner/scanner_test.go`.
-- No third-party test framework is declared in `go.mod`; `go.sum` includes transitive/unused checksum entries but no direct testing dependency.
+`charmbracelet/colorprofile`, `charmbracelet/ultraviolet`, `charmbracelet/x/{ansi,term,termios,windows}`, `clipperhouse/displaywidth`, `clipperhouse/uax29/v2`, `lucasb-eyer/go-colorful`, `mattn/go-runewidth`, `muesli/cancelreader`, `rivo/uniseg`, `xo/terminfo`, `golang.org/x/{sync,sys}`.
 
-**Build/Dev:**
-- `just` recipes - build, install, test, vet, fmt, dev, and ci targets in `justfile`.
-- GNU Make-compatible `make` targets - build, install, test, vet, and fmt targets in `Makefile`.
-- `go build` with `-trimpath` and ldflags version injection (`-X main.version=<VERSION>`) in `justfile`, `Makefile`, and `cmd/mole-tui/main.go`.
-- `gofmt`, `go vet`, `go test ./...`, and `go build` form the local/CI-style quality flow in `justfile`, `Makefile`, and `AGENTS.md`.
-- pre-commit hooks v4.6.0/v0.5.1 enforce whitespace, YAML/JSON checks, LF line endings, go-fmt, go-vet, go-build, and go-unit-tests in `.pre-commit-config.yaml`.
-- Renovate uses `config:recommended` in `renovate.json`.
+## Build & Task Tooling
 
-## Key Dependencies
+- **`justfile` / `just`** — primary task runner (also mirrored in `Makefile`):
+  - `just build` → `go build -ldflags '-X main.version={{VERSION}}' -trimpath -o bin/mole-tui ./cmd/mole-tui`
+  - `just install` → `go install` to `$GOBIN`
+  - `just test` → `go test ./...`
+  - `just vet` → `go vet ./...`
+  - `just fmt` → `gofmt -l -s .` (fails on unformatted files)
+  - `just dev` → build + run `./bin/mole-tui`
+  - `just ci` → fmt → vet → test → build (CI order)
+- **`Makefile`** — equivalent targets (`build`, `install`, `test`, `vet`, `fmt`, `help`); `VERSION` override via `make build VERSION=v0.1.0`.
+- **Version injection** — `main.version` set via `-ldflags '-X main.version=<VERSION>'`; defaults to `"dev"`.
 
-**Critical:**
-- `charm.land/bubbletea/v2` v2.0.7 - event loop and model/update/view architecture for the TUI, declared in `go.mod` and used in `cmd/mole-tui/main.go` and `internal/ui/model.go`.
-- `charm.land/bubbles/v2` v2.1.0 - built-in TUI components (`help`, `key`, `spinner`, `viewport`) used by `internal/ui/model.go`, declared in `go.mod`.
-- `charm.land/lipgloss/v2` v2.0.4 - styling, borders, adaptive colours, and layout used by `internal/ui/styles.go`, declared in `go.mod`.
-- External `mo` CLI from Mole - required runtime backend; checked with `exec.LookPath("mo")` in `cmd/mole-tui/main.go`, invoked by `internal/scanner/scanner.go` and `internal/cleanup/cleanup.go`, and documented in `README.md`.
+## CI / Quality Automation
 
-**Infrastructure:**
-- `github.com/charmbracelet/colorprofile` v0.4.3, `github.com/charmbracelet/x/ansi` v0.11.7, `github.com/charmbracelet/x/term` v0.2.2, `github.com/charmbracelet/x/termios` v0.1.1, and `github.com/charmbracelet/x/windows` v0.2.2 - terminal/color platform support pulled indirectly in `go.mod`.
-- `github.com/mattn/go-runewidth` v0.0.24, `github.com/rivo/uniseg` v0.4.7, `github.com/clipperhouse/displaywidth` v0.11.0, and `github.com/clipperhouse/uax29/v2` v2.7.0 - Unicode/display width support pulled indirectly in `go.mod`.
-- `golang.org/x/sys` v0.46.0 and `golang.org/x/sync` v0.21.0 - low-level system/concurrency support pulled indirectly in `go.mod`.
+- **`.pre-commit-config.yaml`** — pre-commit framework:
+  - `pre-commit-hooks` v4.6.0: trailing-whitespace, end-of-file-fixer, check-yaml, check-json, check-merge-conflict, mixed-line-ending→LF
+  - `dnephin/pre-commit-golang` v0.5.1: go-fmt, go-vet, go-build, go-unit-tests
+- **`renovate.json`** — Renovate bot with `config:recommended` (dependency updates, see commit history for v1→v2 migration commits).
 
 ## Configuration
 
-**Environment:**
-- Runtime configuration is via CLI flags only: `--dry-run`, `-n`, and `--version` in `cmd/mole-tui/main.go`.
-- No application environment variables are read in source under `cmd/` or `internal/`; `$PATH` must contain `mo`, checked in `cmd/mole-tui/main.go`.
-- Build/install respects Go's normal `$GOBIN`/`$GOPATH/bin`; `Makefile` resolves `GOBIN` via `go env`.
+- No runtime config files — the TUI is stateless across runs by design (PRD §6).
+- Only CLI flags: `--dry-run` / `-n` (simulated cleanup, ADR-011), `--version`.
+- `.gitignore`: `bin/`, `*.exe`, `*.test`, `*.out`, `*.ansi.txt`.
 
-**Build:**
-- Build config files: `go.mod`, `go.sum`, `justfile`, `Makefile`, `.pre-commit-config.yaml`, and `renovate.json`.
-- Binary output is `bin/mole-tui` for local builds in `justfile` and `Makefile`.
-- Version defaults to `dev` and can be overridden with `VERSION=...` in `justfile` and `Makefile`; `cmd/mole-tui/main.go` exposes it through `--version`.
+## External Runtime Dependency
 
-## Platform Requirements
+- **`mo` CLI (Mole, tw93)** must be on `$PATH` — resolved once at startup via `exec.LookPath("mo")` in `cmd/mole-tui/main.go`; absence is a pre-TUI fatal error (styled stderr + exit 1). No fallback.
 
-**Development:**
-- Go toolchain compatible with the module target in `go.mod`; README documents Go 1.22+ in `README.md`.
-- `mo`/Mole CLI installed on `$PATH`; README suggests Homebrew install in `README.md`, and the binary exits early if `mo` is missing in `cmd/mole-tui/main.go`.
-- Optional developer tools: `just`, `make`, `pre-commit`, and Renovate configuration as shown in `justfile`, `Makefile`, `.pre-commit-config.yaml`, and `renovate.json`.
+## Key Source Sizes
 
-**Production:**
-- Distributed as a local terminal binary (`mole-tui`) installed with `go install` or `make install`, documented in `README.md`.
-- Targets macOS disk cleanup workflows; README describes the app as orchestrating Mole for macOS disk cleanup and recommends `brew install mole` in `README.md`.
-- Requires terminal access, local filesystem permissions, and optional sudo flow for system-cache scanning via `sudo sh -c "mo clean --dry-run"` in `internal/scanner/scanner.go`.
-
----
-
-*Stack analysis: 2026-06-20*
+| File | Lines |
+|------|-------|
+| `internal/ui/model.go` | 830 |
+| `internal/scanner/scanner_test.go` | 193 |
+| `internal/scanner/scanner.go` | 175 |
+| `internal/ui/styles.go` | 101 |
+| `internal/cleanup/cleanup.go` | 121 |
+| `cmd/mole-tui/main.go` | 48 |
+| `internal/cleanup/cleanup_test.go` | 45 |
+| `README.md` | 141 |

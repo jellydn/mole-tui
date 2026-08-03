@@ -1,77 +1,54 @@
-# External Integrations
+# INTEGRATIONS.md — External Integrations
 
-**Analysis Date:** 2026-06-20
+> Mapped fresh on 2026-08-04.
 
-## APIs & External Services
+## Runtime Integrations
 
-**External CLIs:**
-- Mole CLI (`mo`) - core backend used to preview and perform cleanup; `cmd/mole-tui/main.go` requires it on `$PATH`, `internal/scanner/scanner.go` runs `mo clean --dry-run`, and `internal/cleanup/cleanup.go` runs `mo clean`.
-- `sudo` - optional local privilege escalation for fuller system-cache dry-runs; triggered by the `S` key path and implemented as `sudo sh -c "mo clean --dry-run"` in `internal/scanner/scanner.go`.
-- SDK/Client: Go standard library `os/exec` is used for process execution in `cmd/mole-tui/main.go`, `internal/scanner/scanner.go`, and `internal/cleanup/cleanup.go`.
-- Auth: no API auth; local sudo authentication may be prompted by the operating system for the optional elevated scan in `internal/scanner/scanner.go`.
+### Mole CLI (`mo`) — the only runtime integration
 
-**Remote APIs:**
-- None found. Source under `cmd/` and `internal/` uses local subprocesses and terminal UI libraries, not HTTP clients or SDKs.
+The TUI is a pure **orchestrator** of the [`mole`](https://github.com/tw93/mole) CLI (`mo`) by tw93. All destructive actions go through `mo` — the TUI never deletes files itself (FR-6).
 
-## Data Storage
+Invocation sites:
 
-**Databases:**
-- None. No database drivers are declared in `go.mod`, and no persistence layer appears under `cmd/` or `internal/`.
-- Connection: None.
-- Client: None.
+| Call site | Command | Purpose |
+|-----------|---------|---------|
+| `internal/scanner/scanner.go` — `Scan()` | `mo clean --dry-run` | Discovery + scan; parse output into `[]Section` + `ScanSummary` |
+| `internal/scanner/scanner.go` — `Scan()` (sudo) | `sudo mo clean --dry-run` | Elevated re-scan for system caches (ADR-005) |
+| `internal/cleanup/cleanup.go` — `Run()` | `mo clean` | All-or-nothing cleanup, no item args (ADR-002) |
+| `internal/cleanup/cleanup.go` — `Run()` (sudo) | `sudo mo clean` | Elevated cleanup inheriting sudo intent from last scan |
+| `cmd/mole-tui/main.go` | `exec.LookPath("mo")` | Resolve absolute `mo` path at startup; fatal error if missing |
 
-**File Storage:**
-- Local filesystem only, indirectly through the external Mole CLI cleanup behavior. The TUI itself does not delete files; it invokes `mo clean` in `internal/cleanup/cleanup.go` and parses dry-run output in `internal/scanner/scanner.go`.
-- Test fixtures are local files read by tests under `internal/scanner/testdata/`, as shown in `internal/scanner/scanner_test.go`.
+Details:
+- **No `--json` / machine-readable mode** — output is parsed heuristically (hybrid parsing, ADR-012). PRD open question OQ-1 tracks a future `--json` swap.
+- **Cleanup contract**: `mo clean` takes no per-item arguments, so cleanup is all-or-nothing.
+- **Dry-run simulation**: when the TUI is launched with `--dry-run`, `cleanup.Run` short-circuits — no subprocess, canned "Dry run complete — no files were modified" output (ADR-011).
 
-**Caching:**
-- None. There is no cache service or persisted local cache; scan results live in the Bubble Tea model in memory in `internal/ui/model.go`.
+### sudo (system binary)
 
-## Authentication & Identity
+- Used to elevate `mo` invocations (`sudo mo clean --dry-run`, `sudo mo clean`).
+- **Non-root by default** (ADR-005): elevation is opt-in via the `S` keybinding; the sudo intent from the last scan propagates into cleanup (`lastScanSudo`).
+- May prompt for a password in the terminal during invocation.
 
-**Auth Provider:**
-- None.
-- Implementation: no users, accounts, tokens, OAuth, or API keys are present in `go.mod`, `cmd/`, or `internal/`.
-- Local privilege escalation is limited to optional sudo-based scanning, implemented in `internal/scanner/scanner.go`; this is OS authentication, not app identity.
+## What's NOT integrated
 
-## Monitoring & Observability
+- ❌ No databases, storage, or state persistence (stateless across runs, v1)
+- ❌ No auth providers or accounts
+- ❌ No webhooks / network APIs / telemetry
+- ❌ No cloud services
+- ❌ No third-party Go libraries beyond the Charm TUI stack
 
-**Error Tracking:**
-- None. No error tracking service or telemetry SDK is declared in `go.mod`.
+## Developer / CI Integrations
 
-**Logs:**
-- Local terminal/log-pane output only. Cleanup stdout/stderr are streamed and captured in `internal/cleanup/cleanup.go`, then displayed in the TUI log/report screen in `internal/ui/model.go`.
-- Scanner errors are surfaced as UI error/loading messages through `internal/ui/model.go`.
+| Service | Purpose | Where |
+|---------|---------|-------|
+| pre-commit | Local hook framework (lint/format/test gates) | `.pre-commit-config.yaml` |
+| Renovate | Automated dependency PRs | `renovate.json` |
+| GitHub (implicit) | Repo hosting, PRs, license badges in README | README |
+| Ralph loop (`./ralph/ralph.sh`) | Autonomous agent loop driving CLI backends (opencode, amp, claude, codex, etc.) for story-by-story implementation | `ralph/` — internal dev workflow, not a runtime dep |
 
-## CI/CD & Deployment
+## Data Flow Across the Boundary
 
-**Hosting:**
-- None. The project builds a local CLI/TUI binary, with install/build flows documented in `README.md`, `justfile`, and `Makefile`.
-
-**CI Pipeline:**
-- No `.github` workflow files were present in the repository file listing, so no hosted CI pipeline was found.
-- Local CI-equivalent command is `just ci` (`fmt → vet → test → build`) in `justfile`; `Makefile` provides individual `fmt`, `vet`, `test`, and `build` targets.
-- pre-commit provides local quality gates via `.pre-commit-config.yaml`.
-- Renovate dependency automation is configured by `renovate.json`, but that is dependency management rather than an application deployment pipeline.
-
-## Environment Configuration
-
-**Required env vars:**
-- None for application configuration. No `os.Getenv` usage was found in `cmd/` or `internal/` during source review.
-- `$PATH` must resolve the `mo` binary; this is validated with `exec.LookPath("mo")` in `cmd/mole-tui/main.go`.
-- `$GOBIN`/`$GOPATH` only affect install destination in `Makefile` and normal `go install` behavior; they are not runtime configuration.
-
-**Secrets location:**
-- None. No secrets are configured or referenced in source, `go.mod`, `justfile`, `Makefile`, `.pre-commit-config.yaml`, or `renovate.json`.
-
-## Webhooks & Callbacks
-
-**Incoming:**
-- None. This is a terminal application with no server, routes, or HTTP listener in `cmd/` or `internal/`.
-
-**Outgoing:**
-- None. The app does not call webhooks or external network APIs; it invokes local CLI commands (`mo`, optional `sudo`) via `os/exec` in `internal/scanner/scanner.go` and `internal/cleanup/cleanup.go`.
-
----
-
-*Integration audit: 2026-06-20*
+```
+[mo clean --dry-run] --stdout--> scanner.Parse() --> ScanResult{Sections, Summary}
+[mo clean]           --stdout/stderr--> cleanup.Run() --> streamed lines + Result{ExitCode, Stdout, Stderr, FreedText}
+```
