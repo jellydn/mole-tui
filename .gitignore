@@ -3,3 +3,4 @@ bin/
 *.test
 *.out
 *.ansi.txt
+/mole-sidecar
