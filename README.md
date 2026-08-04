@@ -17,6 +17,7 @@ Navigate, inspect, and reclaim disk space — all from the terminal. No clicking
 - 📊 **Reclaimable size estimate** — Best-effort total of all dry-run sizes at a glance
 - 📝 **Live cleanup log** — Watch `mo clean` output stream in real-time
 - 🕹️ **Confirmation gate** — Review the command and impact before running
+- 🔌 **JSON-RPC sidecar** — Drive the scan and cleanup engine from a desktop GUI or other client
 
 ## 📹 Demo
 
@@ -96,10 +97,49 @@ make build VERSION=v0.1.0 # override version string
 | `just dev` | Build and run |
 | `just ci` | Full pipeline: fmt → vet → test → build |
 
+## 🔌 JSON-RPC Sidecar
+
+The repository also provides `mole-sidecar`, a newline-delimited JSON-RPC 2.0
+bridge for desktop GUI clients and other integrations. It reuses the same scan
+and cleanup engine as the TUI, owns the `mo` subprocess, and never deletes files
+outside the normal `mo clean` command.
+
+Build it locally with:
+
+```bash
+mkdir -p ./bin
+go build -o ./bin/mole-sidecar ./cmd/mole-sidecar
+```
+
+Run it with `mo` available on `$PATH`, then send one JSON request per line on
+stdin. Responses and server events are written one JSON object per line on
+stdout:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"ping"}
+{"jsonrpc":"2.0","id":2,"method":"scan.start","params":{"sudo":false}}
+{"jsonrpc":"2.0","id":3,"method":"cleanup.start","params":{"dryRun":true,"sudo":false}}
+```
+
+Supported methods:
+
+| Method | Purpose |
+|--------|---------|
+| `ping` | Return the sidecar version and resolved `mo` path |
+| `scan.start` | Start `mo clean --dry-run`; accepts `sudo` |
+| `scan.cancel` | Cancel the active scan |
+| `cleanup.start` | Start `mo clean`; accepts `dryRun` and `sudo` |
+| `cleanup.cancel` | Cancel the active cleanup |
+
+Long-running operations emit notifications without an `id`: `scan.done`,
+`scan.error`, `scan.cancelled`, `cleanup.line`, `cleanup.done`, and
+`cleanup.error`.
+
 ## 📁 Project Structure
 
 ```
-cmd/mole-tui/main.go       # Binary entrypoint
+cmd/mole-tui/main.go       # TUI binary entrypoint
+cmd/mole-sidecar/main.go   # JSON-RPC sidecar entrypoint
 internal/
   scanner/                 # Parse `mo clean --dry-run` → structured sections
   cleanup/                 # Shell out to `mo clean`, stream live output
