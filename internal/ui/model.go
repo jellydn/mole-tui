@@ -3,12 +3,9 @@
 package ui
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -80,7 +77,7 @@ type Model struct {
 	logSummary    string
 	quitConfirm   bool // first ctrl+c during cleanup
 	cleanupCancel context.CancelFunc
-	cleanupStream <-chan tea.Msg // streaming channel, set by cleanupCmd
+	cleanupEvents <-chan cleanup.Event // tea-free stream, set by cleanupCmd
 
 	// Help
 	helpKeys help.Model
@@ -191,64 +188,31 @@ func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
 	}
 }
 
-// cleanupCmd creates the cleanup process, stores the stream on the model,
-// and returns a cmd that reads one message from the stream.
+// cleanupCmd starts the tea-free cleanup stream and returns a command that
+// translates one cleanup event into a Bubble Tea message.
 func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
 	opts := cleanup.Options{DryRun: m.DryRun, Sudo: m.lastScanSudo}
-
-	// Dry-run: no subprocess, return canned message immediately.
-	if opts.DryRun {
-		m.cleanupStream = nil
-		return func() tea.Msg {
-			result, _ := cleanup.Run(ctx, opts, io.Discard, m.Mo)
-			return cleanupCompleteMsg{result: result}
-		}
-	}
-
-	pr, pw := io.Pipe()
-	stream := make(chan tea.Msg, 256)
-	m.cleanupStream = stream
-
-	// Worker: run cleanup, tee output to both the pipe (for streaming) and
-	// a buffer (for the final result). When Run returns, close the pipe so
-	// the pump goroutine stops, then send the completion message.
-	go func() {
-		var buf bytes.Buffer
-		tee := io.MultiWriter(pw, &buf)
-		result, err := cleanup.Run(ctx, opts, tee, m.Mo)
-		pw.Close()
-
-		result.Stdout = buf.String()
-		if result.FreedText == "" {
-			result.FreedText = cleanup.ParseSummary(buf.String())
-		}
-		stream <- cleanupCompleteMsg{result: result, err: err}
-	}()
-
-	// Pump: read lines from the pipe and forward them as stream messages.
-	go func() {
-		scanner := bufio.NewScanner(pr)
-		for scanner.Scan() {
-			select {
-			case stream <- cleanupStreamMsg{line: scanner.Text()}:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
+	stream := cleanup.Start(ctx, opts, m.Mo)
+	m.cleanupEvents = stream.Events
 	return m.readCleanupStreamCmd()
 }
 
-// readCleanupStreamCmd returns a tea.Cmd that reads one message from the
-// cleanup stream channel. Returns nil to stop chaining when the stream is
-// nil (cleanup completed or not started).
+// readCleanupStreamCmd returns a tea.Cmd that translates one event from the
+// cleanup package. The cleanup package owns all subprocess and pipe lifecycle;
+// this adapter only maps plain Go events to Bubble Tea messages.
 func (m *Model) readCleanupStreamCmd() tea.Cmd {
 	return func() tea.Msg {
-		if m.cleanupStream == nil {
+		if m.cleanupEvents == nil {
 			return nil
 		}
-		return <-m.cleanupStream
+		event, ok := <-m.cleanupEvents
+		if !ok {
+			return nil
+		}
+		if event.Kind == cleanup.EventDone {
+			return cleanupCompleteMsg{result: event.Done.Result, err: event.Done.Err}
+		}
+		return cleanupStreamMsg{line: event.Line}
 	}
 }
 
@@ -320,16 +284,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logExit = msg.result.ExitCode
 		m.logSummary = msg.result.FreedText
 		m.logStderr = msg.result.Stderr
-		m.cleanupStream = nil
+		m.cleanupEvents = nil
 		m.cleanupCancel = nil
 		if msg.err != nil {
 			m.logSummary = fmt.Sprintf("Error: %s", msg.err)
 			m.logExit = 1
 		}
-		m.logContent = msg.result.Stdout
-		if m.logStderr != "" {
-			m.logContent += "\n" + m.logStderr
-		}
+		// Keep the line stream as the authoritative log so stdout/stderr
+		// interleaving and partial output survive completion errors.
 		m.logVP.SetContent(m.logContent)
 		m.logVP.GotoBottom()
 		return m, nil

@@ -3,6 +3,7 @@
 package cleanup
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -90,6 +91,88 @@ func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Resu
 	result.FreedText = ParseSummary(stdoutBuf.String() + "\n" + stderrBuf.String())
 
 	return result, nil
+}
+
+// EventKind identifies the kind of event in a cleanup stream.
+type EventKind uint8
+
+const (
+	EventLine EventKind = iota
+	EventDone
+)
+
+// Event is one tea-free cleanup stream event. EventLine carries one output
+// line; EventDone carries the final RunResult.
+type Event struct {
+	Kind EventKind
+	Line string
+	Done *RunResult
+}
+
+// RunResult is the completion event produced by Start.
+type RunResult struct {
+	Result Result
+	Err    error
+}
+
+// Stream is the tea-free event source for an asynchronous cleanup run. Events
+// arrive in output order and normally end with one Done event before the
+// channel closes. If the consumer abandons a full stream and cancels the
+// context, Start may close without delivering Done so its worker can exit.
+type Stream struct {
+	Events <-chan Event
+}
+
+// Start runs cleanup asynchronously and owns the output-pump lifecycle. The
+// cleanup package, rather than a UI adapter, owns the pipe, scanner, and
+// goroutines; callers only consume plain Go events and translate them into
+// their framework's messages.
+func Start(ctx context.Context, opts Options, r mo.Runner) Stream {
+	events := make(chan Event, 256)
+
+	go func() {
+		reader, writer := io.Pipe()
+		scanFinished := make(chan struct{})
+
+		go func() {
+			defer close(scanFinished)
+			defer reader.Close()
+			s := bufio.NewScanner(reader)
+			for s.Scan() {
+				select {
+				case events <- Event{Kind: EventLine, Line: s.Text()}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		result, err := Run(ctx, opts, writer, r)
+		_ = writer.Close()
+		<-scanFinished
+		completion := Event{Kind: EventDone, Done: &RunResult{Result: result, Err: err}}
+		// Deliver completion whenever there is room. If a consumer abandoned a
+		// full stream and cancelled the context, stop instead of leaking this
+		// worker forever. A normal consumer (including a cancelled run) gets the
+		// completion event before the channel closes.
+		select {
+		case events <- completion:
+		default:
+			if ctx.Err() != nil {
+				close(events)
+				return
+			}
+			select {
+			case events <- completion:
+			case <-ctx.Done():
+				close(events)
+				return
+			}
+		}
+		close(events)
+	}()
+
+	return Stream{Events: events}
 }
 
 // ParseSummary attempts to extract a "freed" or "cleaned" amount from output.
