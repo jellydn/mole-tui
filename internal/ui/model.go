@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jellydn/mole-tui/internal/cleanup"
+	"github.com/jellydn/mole-tui/internal/mo"
 	"github.com/jellydn/mole-tui/internal/scanner"
 )
 
@@ -38,7 +39,7 @@ const (
 type Model struct {
 	// Config
 	DryRun bool
-	MoPath string // resolved absolute path of mo binary
+	Mo     mo.Runner // mo subprocess seam (production runner or test stub)
 
 	// Screen state
 	screen     Screen
@@ -140,16 +141,16 @@ type cleanupCompleteMsg struct {
 	err    error
 }
 
-// NewModel creates the root model. moPath is the resolved absolute path of
-// the mo binary (from exec.LookPath).
-func NewModel(dryRun bool, moPath string) *Model {
+// NewModel creates the root model. mo is the mo subprocess seam — production
+// callers pass mo.NewRunner(moPath), tests pass a stub.
+func NewModel(dryRun bool, mo mo.Runner) *Model {
 	s := spinner.New()
 	s.Style = spinnerStyle
 	s.Spinner = spinner.Dot
 
 	return &Model{
 		DryRun:      dryRun,
-		MoPath:      moPath,
+		Mo:          mo,
 		screen:      screenLoading,
 		spinner:     s,
 		loadingMsg:  "Scanning… this may take a few minutes",
@@ -182,7 +183,7 @@ func (m *Model) Init() tea.Cmd {
 // scanCmd returns a tea.Cmd that runs `mo clean --dry-run` with the given ctx.
 func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
 	return func() tea.Msg {
-		result, err := scanner.Scan(ctx, m.MoPath, sudo)
+		result, err := scanner.Scan(ctx, m.Mo, sudo)
 		if errors.Is(err, context.Canceled) {
 			return scanCancelledMsg{}
 		}
@@ -199,7 +200,7 @@ func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
 	if opts.DryRun {
 		m.cleanupStream = nil
 		return func() tea.Msg {
-			result, _ := cleanup.Run(ctx, opts, io.Discard, m.MoPath)
+			result, _ := cleanup.Run(ctx, opts, io.Discard, m.Mo)
 			return cleanupCompleteMsg{result: result}
 		}
 	}
@@ -214,7 +215,7 @@ func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
 	go func() {
 		var buf bytes.Buffer
 		tee := io.MultiWriter(pw, &buf)
-		result, err := cleanup.Run(ctx, opts, tee, m.MoPath)
+		result, err := cleanup.Run(ctx, opts, tee, m.Mo)
 		pw.Close()
 
 		result.Stdout = buf.String()

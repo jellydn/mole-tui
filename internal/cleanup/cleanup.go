@@ -7,9 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strings"
+
+	"github.com/jellydn/mole-tui/internal/mo"
 )
 
 // Options controls cleanup behaviour.
@@ -31,14 +32,14 @@ type Result struct {
 // reFreed matches lines like "Total freed: 22.8 GB" or "22.8GB freed".
 var reFreed = regexp.MustCompile(`(?i)(?:freed|cleaned|saved|reclaimed)\s*(?::)?\s*([0-9.]+\s*(?:KB|MB|GB|B))`)
 
-// Run executes `mo clean` with the given options. moPath should be the
-// resolved absolute path of the mo binary (from exec.LookPath). Output is
-// written to writer as it arrives (for live streaming). Returns a Result with
-// the full output.
+// Run executes `mo clean` with the given options. The runner is the
+// injectable seam for the mo subprocess — production callers pass
+// mo.NewRunner(moPath), tests pass a stub. Output is written to writer as it
+// arrives (for live streaming). Returns a Result with the full output.
 //
 // When DryRun is true, no command is executed — the writer receives a canned
 // message and the result indicates success.
-func Run(ctx context.Context, opts Options, writer io.Writer, moPath string) (Result, error) {
+func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Result, error) {
 	if opts.DryRun {
 		msg := "Dry run complete — no files were modified\n"
 		if _, err := io.WriteString(writer, msg); err != nil {
@@ -51,49 +52,16 @@ func Run(ctx context.Context, opts Options, writer io.Writer, moPath string) (Re
 		}, nil
 	}
 
-	var cmd *exec.Cmd
-	if opts.Sudo {
-		cmd = exec.CommandContext(ctx, "sudo", moPath, "clean")
-	} else {
-		cmd = exec.CommandContext(ctx, moPath, "clean")
-	}
-
 	var stdoutBuf, stderrBuf bytes.Buffer
-	// Tee stdout so we capture it while writing to the UI
+	// Both streams go live to the writer while being buffered for the final
+	// result; the runner owns all subprocess plumbing.
 	stdout := io.MultiWriter(writer, &stdoutBuf)
-	cmd.Stdout = stdout
-	cmd.Stderr = &stderrBuf
+	stderr := io.MultiWriter(writer, &stderrBuf)
 
-	// Also capture stderr to writer for live streaming
-	// exec.Cmd only supports one Stderr writer, so we tee manually
-	pr, pw := io.Pipe()
-	cmd.Stderr = pw
-
-	err := cmd.Start()
+	exitCode, err := r.Run(ctx, opts.Sudo, stdout, stderr, "clean")
 	if err != nil {
-		return Result{}, fmt.Errorf("start mo clean: %w", err)
-	}
-
-	// Read stderr and tee to both writer and buffer
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		_, _ = io.Copy(io.MultiWriter(writer, &stderrBuf), pr)
-	}()
-
-	runErr := cmd.Wait()
-
-	// Close the pipe writer so the goroutine finishes
-	pw.Close()
-	<-stderrDone
-
-	exitCode := 0
-	if runErr != nil {
-		if exitErr, ok := runErr.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-		}
+		// Covers both start failures and cancellation mid-run.
+		return Result{}, fmt.Errorf("mo clean failed: %w", err)
 	}
 
 	result := Result{

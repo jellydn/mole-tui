@@ -6,10 +6,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/jellydn/mole-tui/internal/mo"
 )
 
 // Section represents a named group of related cleanup items.
@@ -144,29 +145,25 @@ func Parse(output string) ScanResult {
 	return result
 }
 
-// Scan invokes `mo clean --dry-run` (with optional sudo elevation) and returns
-// the parsed result. moPath should be the resolved absolute path of the mo
-// binary (from exec.LookPath). The context controls cancellation / timeout.
-func Scan(ctx context.Context, moPath string, sudo bool) (ScanResult, error) {
-	var cmd *exec.Cmd
-	if sudo {
-		cmd = exec.CommandContext(ctx, "sudo", moPath, "clean", "--dry-run")
-	} else {
-		cmd = exec.CommandContext(ctx, moPath, "clean", "--dry-run")
-	}
-
+// Scan runs `mo clean --dry-run` (with optional sudo elevation) through the
+// given mo runner and returns the parsed result. The runner is the injectable
+// seam for the mo subprocess — production callers pass mo.NewRunner(moPath),
+// tests pass a stub. The context controls cancellation / timeout.
+func Scan(ctx context.Context, r mo.Runner, sudo bool) (ScanResult, error) {
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		// Check for context cancellation before wrapping
+	exitCode, err := r.Run(ctx, sudo, &stdout, &stderr, "clean", "--dry-run")
+	if exitCode != 0 || err != nil {
+		// Check for context cancellation before wrapping.
 		if ctx.Err() != nil {
 			return ScanResult{}, ctx.Err()
 		}
 		errOutput := strings.TrimSpace(stderr.String())
 		if errOutput == "" {
-			errOutput = err.Error()
+			if err != nil {
+				errOutput = err.Error()
+			} else {
+				errOutput = fmt.Sprintf("exit status %d", exitCode)
+			}
 		}
 		return ScanResult{}, fmt.Errorf("mo clean --dry-run failed: %s", errOutput)
 	}

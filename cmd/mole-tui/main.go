@@ -4,10 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jellydn/mole-tui/internal/mo"
 	"github.com/jellydn/mole-tui/internal/ui"
 )
 
@@ -28,8 +28,8 @@ func main() {
 	// Combine --dry-run and -n
 	dryRunMode := *dryRun || *dryRunShort
 
-	// Resolve the absolute mo path for safety and display
-	moPath, err := exec.LookPath("mo")
+	// Resolve mo at the boundary; missing mo is a pre-TUI fatal error.
+	moPath, err := mo.Resolve()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\033[1;31mError:\033[0m mo is not on $PATH\n")
 		fmt.Fprintf(os.Stderr, "\n")
@@ -39,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.NewModel(dryRunMode, moPath))
+	p := tea.NewProgram(ui.NewModel(dryRunMode, mo.NewRunner(moPath)))
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
