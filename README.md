@@ -47,6 +47,48 @@ cd mole-tui
 make install
 ```
 
+## 🔌 Programmatic access with `mole-sidecar`
+
+The repository also ships `mole-sidecar`, a small companion process for desktop
+GUIs and other clients. It exposes the same scan and cleanup engine over
+newline-delimited [JSON-RPC 2.0](https://www.jsonrpc.org/specification) on
+stdin/stdout. The sidecar requires the Mole CLI (`mo`) to be available on
+`$PATH` and never deletes files directly; destructive work still goes through
+`mo clean`.
+
+Install it with Go:
+
+```bash
+go install github.com/jellydn/mole-tui/cmd/mole-sidecar@latest
+```
+
+Or build it locally:
+
+```bash
+go build -o ./bin/mole-sidecar ./cmd/mole-sidecar
+```
+
+Start the sidecar as a long-lived process and send one JSON request per line:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"ping"}
+```
+
+Available methods:
+
+| Method | Parameters | Behaviour |
+|--------|------------|-----------|
+| `ping` | — | Returns the sidecar version and resolved `mo` path |
+| `scan.start` | `{"sudo": true\|false}` | Starts `mo clean --dry-run`; emits `scan.done`, `scan.error`, or `scan.cancelled` |
+| `scan.cancel` | — | Cancels the active scan |
+| `cleanup.start` | `{"dryRun": true\|false, "sudo": true\|false}` | Starts cleanup; emits `cleanup.line` chunks followed by `cleanup.done` or `cleanup.error` |
+| `cleanup.cancel` | — | Cancels the active cleanup |
+
+Start methods immediately return an `accepted` response. Clients should keep
+reading stdout for asynchronous notifications such as `cleanup.line` while the
+operation is running. A cancelled cleanup ends with `cleanup.done` and
+`params.cancelled: true`; scans emit `scan.cancelled` when cancelled.
+
 ## 🎮 Usage
 
 ```bash
@@ -99,10 +141,12 @@ make build VERSION=v0.1.0 # override version string
 ## 📁 Project Structure
 
 ```
-cmd/mole-tui/main.go       # Binary entrypoint
+cmd/mole-tui/main.go       # TUI binary entrypoint
+cmd/mole-sidecar/main.go   # JSON-RPC sidecar binary entrypoint
 internal/
+  mo/                      # Injectable boundary around the `mo` subprocess
   scanner/                 # Parse `mo clean --dry-run` → structured sections
-  cleanup/                 # Shell out to `mo clean`, stream live output
+  cleanup/                 # Shell out to `mo clean`, stream live output/events
   ui/                      # Bubble Tea models, views, keybindings (5 screens)
 ```
 
@@ -110,9 +154,10 @@ internal/
 
 | Layer    | Choice                                                       |
 | -------- | ------------------------------------------------------------ |
-| TUI      | [Bubble Tea](https://github.com/charmbracelet/bubbletea) v1 |
-| Widgets  | [Bubbles](https://github.com/charmbracelet/bubbles) v1       |
-| Styling  | [Lip Gloss](https://github.com/charmbracelet/lipgloss) v1    |
+| TUI      | [Bubble Tea](https://charm.land/bubbletea) v2.0.8             |
+| Widgets  | [Bubbles](https://charm.land/bubbles) v2.1.1                  |
+| Styling  | [Lip Gloss](https://charm.land/lipgloss) v2.0.5               |
+| Sidecar  | Newline-delimited JSON-RPC 2.0 over stdio                   |
 | Backend  | `mo clean` / `mo clean --dry-run` (Mole CLI)                 |
 
 ## 📄 License
