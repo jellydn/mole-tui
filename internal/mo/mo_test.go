@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeFakeMo writes a stub mo shell script and returns its path. Behaviors
@@ -17,6 +18,7 @@ import (
 //	clean --dry-run → dry-run output, exit 0
 //	clean           → cleanup output, exit 0
 //	clean fail      → stderr "boom", exit 3
+//	clean sleep     → sleep briefly (for cancellation tests)
 func writeFakeMo(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mo")
@@ -30,6 +32,10 @@ case "$2" in
   fail)
     echo "boom" >&2
     exit 3
+    ;;
+  sleep)
+    sleep 2
+    exit 0
     ;;
 esac
 if [ "$1" = "clean" ]; then
@@ -113,6 +119,26 @@ func TestExecRunnerCancellation(t *testing.T) {
 	exit, err := r.Run(ctx, false, io.Discard, io.Discard, "clean")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if exit != -1 {
+		t.Errorf("exit = %d, want -1", exit)
+	}
+}
+
+// TestExecRunnerMidRunCancellation verifies cancellation during a running
+// command surfaces the context error instead of a synthetic exit code.
+func TestExecRunnerMidRunCancellation(t *testing.T) {
+	r := NewRunner(writeFakeMo(t))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	exit, err := r.Run(ctx, false, io.Discard, io.Discard, "clean", "sleep")
+	if elapsed := time.Since(started); elapsed >= commandWaitDelay+500*time.Millisecond {
+		t.Fatalf("Run took %s; WaitDelay did not bound inherited pipe cleanup", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
 	}
 	if exit != -1 {
 		t.Errorf("exit = %d, want -1", exit)

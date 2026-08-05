@@ -9,6 +9,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/jellydn/mole-tui/internal/mo"
 )
@@ -32,6 +33,19 @@ type Result struct {
 // reFreed matches lines like "Total freed: 22.8 GB" or "22.8GB freed".
 var reFreed = regexp.MustCompile(`(?i)(?:freed|cleaned|saved|reclaimed)\s*(?::)?\s*([0-9.]+\s*(?:KB|MB|GB|B))`)
 
+// synchronizedWriter serializes writes from the runner's concurrent stdout
+// and stderr pumps before they reach the caller's writer.
+type synchronizedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *synchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
 // Run executes `mo clean` with the given options. The runner is the
 // injectable seam for the mo subprocess — production callers pass
 // mo.NewRunner(moPath), tests pass a stub. Output is written to writer as it
@@ -54,9 +68,11 @@ func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Resu
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	// Both streams go live to the writer while being buffered for the final
-	// result; the runner owns all subprocess plumbing.
-	stdout := io.MultiWriter(writer, &stdoutBuf)
-	stderr := io.MultiWriter(writer, &stderrBuf)
+	// result; the runner owns all subprocess plumbing. os/exec may write to
+	// stdout and stderr concurrently, so protect the caller's writer.
+	streamWriter := &synchronizedWriter{w: writer}
+	stdout := io.MultiWriter(streamWriter, &stdoutBuf)
+	stderr := io.MultiWriter(streamWriter, &stderrBuf)
 
 	exitCode, err := r.Run(ctx, opts.Sudo, stdout, stderr, "clean")
 	if err != nil {

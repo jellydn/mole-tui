@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // Runner executes mo commands. The production implementation spawns the real
@@ -23,6 +24,10 @@ type Runner interface {
 // execRunner is the production Runner backed by os/exec.
 type execRunner struct{ moPath string }
 
+// commandWaitDelay bounds how long os/exec waits for descendant processes to
+// close inherited output pipes after the command is cancelled.
+const commandWaitDelay = time.Second
+
 func (r *execRunner) Run(ctx context.Context, sudo bool, stdoutW, stderrW io.Writer, args ...string) (int, error) {
 	var cmd *exec.Cmd
 	if sudo {
@@ -30,9 +35,16 @@ func (r *execRunner) Run(ctx context.Context, sudo bool, stdoutW, stderrW io.Wri
 	} else {
 		cmd = exec.CommandContext(ctx, r.moPath, args...)
 	}
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 	if err := cmd.Run(); err != nil {
+		// CommandContext reports a killed process as an ExitError. Preserve the
+		// context cause so callers can distinguish cancellation from a failed
+		// mo invocation.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return -1, ctxErr
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode(), nil
 		}
