@@ -39,6 +39,23 @@ func TestRunStreamsOutput(t *testing.T) {
 
 // TestRunExitCode verifies non-zero exits surface on Result, not as an error
 // (the UI renders the exit code banner itself).
+func TestSessionRunDirect(t *testing.T) {
+	stub := motest.New()
+	stub.CleanOutput = "cleaning...\nTotal freed: 3 MB\n"
+
+	var buf bytes.Buffer
+	result, err := NewSession(context.Background(), Options{}, stub).Run(&buf)
+	if err != nil {
+		t.Fatalf("Session.Run: %v", err)
+	}
+	if result.ExitCode != 0 || result.FreedText != "Total freed: 3 MB" {
+		t.Fatalf("result = %+v, want successful 3 MB cleanup", result)
+	}
+	if got := buf.String(); got != stub.CleanOutput {
+		t.Errorf("streamed output = %q, want %q", got, stub.CleanOutput)
+	}
+}
+
 func TestRunExitCode(t *testing.T) {
 	stub := motest.New()
 	stub.CleanExit = 3

@@ -47,15 +47,26 @@ func (w *synchronizedWriter) Write(p []byte) (int, error) {
 	return w.w.Write(p)
 }
 
-// Run executes `mo clean` with the given options. The runner is the
-// injectable seam for the mo subprocess — production callers pass
-// mo.NewRunner(moPath), tests pass a stub. Output is written to writer as it
-// arrives (for live streaming). Returns a Result with the full output.
-//
-// When DryRun is true, no command is executed — the writer receives a canned
-// message and the result indicates success.
-func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Result, error) {
-	if opts.DryRun {
+// Session owns one Cleanup session's options, runner, context, output
+// lifecycle, and result semantics. Consumers choose Run for synchronous use or
+// Start for the tea-free event stream without reconstructing those facts.
+type Session struct {
+	ctx    context.Context
+	opts   Options
+	runner mo.Runner
+}
+
+// NewSession creates a Cleanup session. The session does not start work until
+// Run or Start is called.
+func NewSession(ctx context.Context, opts Options, runner mo.Runner) Session {
+	return Session{ctx: ctx, opts: opts, runner: runner}
+}
+
+// Run executes this Cleanup session synchronously. Output is written to writer
+// as it arrives (for live streaming), and the returned Result retains the full
+// stdout/stderr buffers.
+func (s Session) Run(writer io.Writer) (Result, error) {
+	if s.opts.DryRun {
 		msg := "Dry run complete — no files were modified\n"
 		if _, err := io.WriteString(writer, msg); err != nil {
 			return Result{}, fmt.Errorf("write dry-run message: %w", err)
@@ -75,7 +86,7 @@ func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Resu
 	stdout := io.MultiWriter(streamWriter, &stdoutBuf)
 	stderr := io.MultiWriter(streamWriter, &stderrBuf)
 
-	exitCode, err := r.Run(ctx, opts.Sudo, stdout, stderr, "clean")
+	exitCode, err := s.runner.Run(s.ctx, s.opts.Sudo, stdout, stderr, "clean")
 	if err != nil {
 		// Covers both start failures and cancellation mid-run.
 		return Result{}, fmt.Errorf("mo clean failed: %w", err)
@@ -87,10 +98,14 @@ func Run(ctx context.Context, opts Options, writer io.Writer, r mo.Runner) (Resu
 		Stderr:   stderrBuf.String(),
 	}
 
-	// Try to extract a freed amount from the full combined output
+	// Try to extract a freed amount from the full combined output.
 	result.FreedText = ParseSummary(stdoutBuf.String() + "\n" + stderrBuf.String())
-
 	return result, nil
+}
+
+// Run is the compatibility convenience for one synchronous Cleanup session.
+func Run(ctx context.Context, opts Options, writer io.Writer, runner mo.Runner) (Result, error) {
+	return NewSession(ctx, opts, runner).Run(writer)
 }
 
 // EventKind identifies the kind of event in a cleanup stream.
@@ -127,7 +142,7 @@ type Stream struct {
 // cleanup package, rather than a UI adapter, owns the pipe, scanner, and
 // goroutines; callers only consume plain Go events and translate them into
 // their framework's messages.
-func Start(ctx context.Context, opts Options, r mo.Runner) Stream {
+func (s Session) Start() Stream {
 	events := make(chan Event, 256)
 
 	go func() {
@@ -137,17 +152,17 @@ func Start(ctx context.Context, opts Options, r mo.Runner) Stream {
 		go func() {
 			defer close(scanFinished)
 			defer reader.Close()
-			s := bufio.NewScanner(reader)
-			for s.Scan() {
+			scanner := bufio.NewScanner(reader)
+			for scanner.Scan() {
 				select {
-				case events <- Event{Kind: EventLine, Line: s.Text()}:
-				case <-ctx.Done():
+				case events <- Event{Kind: EventLine, Line: scanner.Text()}:
+				case <-s.ctx.Done():
 					return
 				}
 			}
 		}()
 
-		result, err := Run(ctx, opts, writer, r)
+		result, err := s.Run(writer)
 		_ = writer.Close()
 		<-scanFinished
 		completion := Event{Kind: EventDone, Done: &RunResult{Result: result, Err: err}}
@@ -158,13 +173,13 @@ func Start(ctx context.Context, opts Options, r mo.Runner) Stream {
 		select {
 		case events <- completion:
 		default:
-			if ctx.Err() != nil {
+			if s.ctx.Err() != nil {
 				close(events)
 				return
 			}
 			select {
 			case events <- completion:
-			case <-ctx.Done():
+			case <-s.ctx.Done():
 				close(events)
 				return
 			}
@@ -173,6 +188,11 @@ func Start(ctx context.Context, opts Options, r mo.Runner) Stream {
 	}()
 
 	return Stream{Events: events}
+}
+
+// Start is the compatibility convenience for one asynchronous Cleanup session.
+func Start(ctx context.Context, opts Options, runner mo.Runner) Stream {
+	return NewSession(ctx, opts, runner).Start()
 }
 
 // ParseSummary attempts to extract a "freed" or "cleaned" amount from output.
