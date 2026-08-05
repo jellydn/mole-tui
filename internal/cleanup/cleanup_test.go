@@ -5,12 +5,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/jellydn/mole-tui/internal/mo/motest"
 )
 
 func TestRunDryRun(t *testing.T) {
 	ctx := context.Background()
 	var buf bytes.Buffer
-	result, err := Run(ctx, Options{DryRun: true}, &buf, "mo")
+	result, err := Run(ctx, Options{DryRun: true}, &buf, motest.New())
 	if err != nil {
 		t.Fatalf("Run with DryRun failed: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/jellydn/mole-tui/internal/cleanup"
+	"github.com/jellydn/mole-tui/internal/mo"
 	"github.com/jellydn/mole-tui/internal/scanner"
 )
 
@@ -57,6 +58,7 @@ type server struct {
 
 	mu            sync.Mutex
 	moPath        string
+	moRunner      mo.Runner
 	scanCancel    context.CancelFunc
 	cleanupCancel context.CancelFunc
 	scanDone      chan struct{} // closed when the scan goroutine finishes (test hook)
@@ -131,6 +133,13 @@ func invalidParams(err error) *rpcError {
 
 // startScan kicks off `mo clean --dry-run` in a goroutine. Completion is
 // reported as scan.done / scan.error / scan.cancelled events.
+func (s *server) runner() mo.Runner {
+	if s.moRunner != nil {
+		return s.moRunner
+	}
+	return mo.NewRunner(s.moPath)
+}
+
 func (s *server) startScan(p scanParams) (any, *rpcError) {
 	s.mu.Lock()
 	if s.scanCancel != nil {
@@ -144,7 +153,7 @@ func (s *server) startScan(p scanParams) (any, *rpcError) {
 
 	go func() {
 		defer close(s.scanDone)
-		result, err := scanner.Scan(ctx, s.moPath, p.Sudo)
+		result, err := scanner.Scan(ctx, s.runner(), p.Sudo)
 		s.mu.Lock()
 		s.scanCancel = nil
 		s.mu.Unlock()
@@ -176,7 +185,7 @@ func (s *server) startCleanup(p cleanupParams) (any, *rpcError) {
 	go func() {
 		defer close(s.cleanupDone)
 		opts := cleanup.Options{DryRun: p.DryRun, Sudo: p.Sudo}
-		result, err := cleanup.Run(ctx, opts, &eventWriter{s: s}, s.moPath)
+		result, err := cleanup.Run(ctx, opts, &eventWriter{s: s}, s.runner())
 		if err != nil && ctx.Err() == nil {
 			s.emit("cleanup.error", map[string]string{"error": err.Error()})
 			return
@@ -237,7 +246,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mole-sidecar: mo is not on $PATH (see https://github.com/tw93/mole)")
 		os.Exit(1)
 	}
-	s := &server{out: os.Stdout, moPath: moPath}
+	s := &server{out: os.Stdout, moPath: moPath, moRunner: mo.NewRunner(moPath)}
 	if err := s.serve(os.Stdin); err != nil {
 		fmt.Fprintf(os.Stderr, "mole-sidecar: %v\n", err)
 		os.Exit(1)
