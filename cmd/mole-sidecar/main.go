@@ -2,20 +2,23 @@
 // JSON-RPC 2.0 (newline-delimited JSON on stdio) so external GUIs can drive
 // the mo CLI without owning subprocesses. It never deletes files itself —
 // all destructive actions go through `mo clean` (FR-6).
+//
+// The JSON-RPC framing and wire encoding live in internal/jsonrpc; this
+// package only owns the scan/cleanup lifecycle and translates it into
+// responses and notifications.
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 
 	"github.com/jellydn/mole-tui/internal/cleanup"
+	"github.com/jellydn/mole-tui/internal/jsonrpc"
 	"github.com/jellydn/mole-tui/internal/mo"
 	"github.com/jellydn/mole-tui/internal/scanner"
 )
@@ -23,38 +26,11 @@ import (
 // version is injected at build time via -ldflags (like cmd/mole-tui).
 var version = "dev"
 
-// ---- JSON-RPC 2.0 wire types ----
-
-type request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params"`
-}
-
-type response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// event is a server-initiated notification (no id).
-type event struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-	Params  any    `json:"params"`
-}
-
-// ---- server ----
-
+// server is the JSON-RPC handler for the sidecar. It owns the scan and
+// cleanup lifecycle and reports progress via transport notifications; all wire
+// framing and encoding lives in the jsonrpc transport.
 type server struct {
-	out io.Writer
+	transport *jsonrpc.Server
 
 	mu            sync.Mutex
 	moPath        string
@@ -74,28 +50,17 @@ type cleanupParams struct {
 	Sudo   bool `json:"sudo"`
 }
 
-// serve reads requests from in until EOF, dispatching each one synchronously.
-// Long-running work (scan/cleanup) runs in goroutines and reports via events.
-func (s *server) serve(in io.Reader) error {
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var req request
-		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			s.respond(nil, nil, &rpcError{Code: -32700, Message: "parse error"})
-			continue
-		}
-		result, rerr := s.handle(req.Method, req.Params)
-		s.respond(req.ID, result, rerr)
-	}
-	return sc.Err()
+// newServer wires the domain server to a jsonrpc transport reading from in and
+// writing to out. runner may be nil to resolve mo at runtime from moPath.
+func newServer(in io.Reader, out io.Writer, moPath string, runner mo.Runner) *server {
+	s := &server{moPath: moPath, moRunner: runner}
+	s.transport = jsonrpc.NewServer(in, out, s)
+	return s
 }
 
-func (s *server) handle(method string, params json.RawMessage) (any, *rpcError) {
+// Handle implements jsonrpc.Handler. Long-running work (scan/cleanup) runs in
+// goroutines and reports via notifications.
+func (s *server) Handle(method string, params json.RawMessage) (any, *jsonrpc.Error) {
 	switch method {
 	case "ping":
 		return map[string]any{"version": version, "moPath": s.moPath}, nil
@@ -123,12 +88,12 @@ func (s *server) handle(method string, params json.RawMessage) (any, *rpcError) 
 		return map[string]bool{"accepted": true}, nil
 
 	default:
-		return nil, &rpcError{Code: -32601, Message: "method not found: " + method}
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "method not found: " + method}
 	}
 }
 
-func invalidParams(err error) *rpcError {
-	return &rpcError{Code: -32602, Message: "invalid params: " + err.Error()}
+func invalidParams(err error) *jsonrpc.Error {
+	return &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid params: " + err.Error()}
 }
 
 // startScan kicks off `mo clean --dry-run` in a goroutine. Completion is
@@ -140,11 +105,11 @@ func (s *server) runner() mo.Runner {
 	return mo.NewRunner(s.moPath)
 }
 
-func (s *server) startScan(p scanParams) (any, *rpcError) {
+func (s *server) startScan(p scanParams) (any, *jsonrpc.Error) {
 	s.mu.Lock()
 	if s.scanCancel != nil {
 		s.mu.Unlock()
-		return nil, &rpcError{Code: -32000, Message: "a scan is already running"}
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeServerError, Message: "a scan is already running"}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.scanCancel = cancel
@@ -159,11 +124,11 @@ func (s *server) startScan(p scanParams) (any, *rpcError) {
 		s.mu.Unlock()
 		switch {
 		case err != nil && ctx.Err() != nil:
-			s.emit("scan.cancelled", map[string]string{"reason": "cancelled"})
+			s.transport.Notify("scan.cancelled", map[string]string{"reason": "cancelled"})
 		case err != nil:
-			s.emit("scan.error", map[string]string{"error": err.Error()})
+			s.transport.Notify("scan.error", map[string]string{"error": err.Error()})
 		default:
-			s.emit("scan.done", map[string]any{"result": result})
+			s.transport.Notify("scan.done", map[string]any{"result": result})
 		}
 	}()
 	return map[string]bool{"accepted": true}, nil
@@ -171,11 +136,11 @@ func (s *server) startScan(p scanParams) (any, *rpcError) {
 
 // startCleanup kicks off `mo clean` in a goroutine, streaming stdout/stderr
 // chunks as cleanup.line events and completion as cleanup.done.
-func (s *server) startCleanup(p cleanupParams) (any, *rpcError) {
+func (s *server) startCleanup(p cleanupParams) (any, *jsonrpc.Error) {
 	s.mu.Lock()
 	if s.cleanupCancel != nil {
 		s.mu.Unlock()
-		return nil, &rpcError{Code: -32000, Message: "a cleanup is already running"}
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeServerError, Message: "a cleanup is already running"}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupCancel = cancel
@@ -187,10 +152,10 @@ func (s *server) startCleanup(p cleanupParams) (any, *rpcError) {
 		opts := cleanup.Options{DryRun: p.DryRun, Sudo: p.Sudo}
 		result, err := cleanup.Run(ctx, opts, &eventWriter{s: s}, s.runner())
 		if err != nil && ctx.Err() == nil {
-			s.emit("cleanup.error", map[string]string{"error": err.Error()})
+			s.transport.Notify("cleanup.error", map[string]string{"error": err.Error()})
 			return
 		}
-		s.emit("cleanup.done", map[string]any{"result": result, "cancelled": ctx.Err() != nil})
+		s.transport.Notify("cleanup.done", map[string]any{"result": result, "cancelled": ctx.Err() != nil})
 	}()
 	return map[string]bool{"accepted": true}, nil
 }
@@ -211,32 +176,12 @@ func (s *server) cancelCleanup() {
 	}
 }
 
-func (s *server) respond(id json.RawMessage, result any, rerr *rpcError) {
-	data, err := json.Marshal(response{JSONRPC: "2.0", ID: id, Result: result, Error: rerr})
-	if err != nil {
-		data = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fmt.Fprintln(s.out, string(data))
-}
-
-func (s *server) emit(method string, params any) {
-	data, err := json.Marshal(event{JSONRPC: "2.0", Method: method, Params: params})
-	if err != nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fmt.Fprintln(s.out, string(data))
-}
-
 // eventWriter forwards cleanup output chunks to the client as cleanup.line
 // events, so a GUI can stream live output without holding a terminal.
 type eventWriter struct{ s *server }
 
 func (w *eventWriter) Write(p []byte) (int, error) {
-	w.s.emit("cleanup.line", map[string]string{"line": string(p)})
+	w.s.transport.Notify("cleanup.line", map[string]string{"line": string(p)})
 	return len(p), nil
 }
 
@@ -246,8 +191,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mole-sidecar: mo is not on $PATH (see https://github.com/tw93/mole)")
 		os.Exit(1)
 	}
-	s := &server{out: os.Stdout, moPath: moPath, moRunner: mo.NewRunner(moPath)}
-	if err := s.serve(os.Stdin); err != nil {
+	s := newServer(os.Stdin, os.Stdout, moPath, mo.NewRunner(moPath))
+	if err := s.transport.Serve(); err != nil {
 		fmt.Fprintf(os.Stderr, "mole-sidecar: %v\n", err)
 		os.Exit(1)
 	}
