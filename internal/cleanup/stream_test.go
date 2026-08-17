@@ -12,11 +12,11 @@ import (
 	"github.com/jellydn/mole-tui/internal/mo/motest"
 )
 
-func TestStartStreamsLinesBeforeCompletion(t *testing.T) {
+func TestSessionStartStreamsLinesBeforeCompletion(t *testing.T) {
 	stub := motest.New()
 	stub.CleanOutput = "cleaning...\nTotal freed: 22.8 GB\nfinished\n"
 
-	stream := Start(context.Background(), Options{}, stub)
+	stream := NewSession(context.Background(), Options{}, stub).Start()
 	var lines []string
 	var completion *RunResult
 	for event := range stream.Events {
@@ -44,9 +44,9 @@ func TestStartStreamsLinesBeforeCompletion(t *testing.T) {
 	}
 }
 
-func TestStartDryRunProducesCompletion(t *testing.T) {
+func TestSessionStartDryRunProducesCompletion(t *testing.T) {
 	stub := motest.New()
-	stream := Start(context.Background(), Options{DryRun: true}, stub)
+	stream := NewSession(context.Background(), Options{DryRun: true}, stub).Start()
 
 	var lines []string
 	var completion *RunResult
@@ -69,13 +69,13 @@ func TestStartDryRunProducesCompletion(t *testing.T) {
 	}
 }
 
-func TestStartCancellationCompletesWithoutLeaking(t *testing.T) {
+func TestSessionStartCancellationCompletesWithoutLeaking(t *testing.T) {
 	stub := motest.New()
 	stub.Sleep = time.Hour
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	stream := Start(ctx, Options{}, stub)
+	stream := NewSession(ctx, Options{}, stub).Start()
 	select {
 	case event, ok := <-stream.Events:
 		if !ok || event.Kind != EventDone || event.Done == nil {
@@ -102,7 +102,7 @@ func TestStartFullBufferStopsAfterCancellation(t *testing.T) {
 	stub := motest.New()
 	stub.CleanOutput = output.String()
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := Start(ctx, Options{}, stub)
+	stream := NewSession(ctx, Options{}, stub).Start()
 
 	deadline := time.Now().Add(time.Second)
 	for len(stream.Events) < 256 && time.Now().Before(deadline) {
@@ -127,11 +127,11 @@ func TestStartFullBufferStopsAfterCancellation(t *testing.T) {
 	}
 }
 
-func TestStartAbandonedConsumerStopsAfterCancellation(t *testing.T) {
+func TestSessionStartAbandonedConsumerStopsAfterCancellation(t *testing.T) {
 	stub := motest.New()
 	stub.CleanOutput = "line\n"
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := Start(ctx, Options{}, stub)
+	stream := NewSession(ctx, Options{}, stub).Start()
 
 	// Do not consume the stream. Cancellation must still let the producer
 	// finish instead of blocking forever on an output or completion send.
