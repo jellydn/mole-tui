@@ -3,8 +3,6 @@
 package ui
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +48,6 @@ type Model struct {
 	spinner     spinner.Model
 	loadingMsg  string
 	loadingTime time.Time
-	scanCancel  context.CancelFunc
 
 	// Scan results
 	scanResult  scanner.ScanResult
@@ -69,15 +66,15 @@ type Model struct {
 	confirmDryRun bool
 
 	// Log/Report
-	logContent    string
-	logStderr     string
-	logVP         viewport.Model
-	logDone       bool
-	logExit       int
-	logSummary    string
-	quitConfirm   bool // first ctrl+c during cleanup
-	cleanupCancel context.CancelFunc
-	cleanupEvents <-chan cleanup.Event // tea-free stream, set by cleanupCmd
+	logContent  string
+	logStderr   string
+	logVP       viewport.Model
+	logDone     bool
+	logExit     int
+	logSummary  string
+	quitConfirm bool // first ctrl+c during cleanup
+
+	operations operationController
 
 	// Help
 	helpKeys help.Model
@@ -154,6 +151,7 @@ func NewModel(dryRun bool, mo mo.Runner) *Model {
 		loadingTime: time.Now(),
 		expanded:    make(map[int]bool),
 		helpKeys:    help.New(),
+		operations:  newOperationController(dryRun, mo),
 	}
 }
 
@@ -165,55 +163,12 @@ func (m *Model) startScan(sudo bool, msg string) tea.Cmd {
 	m.loadingMsg = msg
 	m.loadingTime = time.Now()
 	m.lastScanSudo = sudo
-	ctx, cancel := context.WithCancel(context.Background())
-	m.scanCancel = cancel
-	return m.scanCmd(ctx, sudo)
+	return m.operations.startScan(sudo)
 }
 
 func (m *Model) Init() tea.Cmd {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.scanCancel = cancel
 	m.lastScanSudo = false
-	return tea.Batch(m.spinner.Tick, m.scanCmd(ctx, false))
-}
-
-// scanCmd returns a tea.Cmd that runs `mo clean --dry-run` with the given ctx.
-func (m *Model) scanCmd(ctx context.Context, sudo bool) tea.Cmd {
-	return func() tea.Msg {
-		result, err := scanner.Scan(ctx, m.Mo, sudo)
-		if errors.Is(err, context.Canceled) {
-			return scanCancelledMsg{}
-		}
-		return scanCompleteMsg{result: result, err: err}
-	}
-}
-
-// cleanupCmd starts the tea-free cleanup stream and returns a command that
-// translates one cleanup event into a Bubble Tea message.
-func (m *Model) cleanupCmd(ctx context.Context) tea.Cmd {
-	opts := cleanup.Options{DryRun: m.DryRun, Sudo: m.lastScanSudo}
-	stream := cleanup.Start(ctx, opts, m.Mo)
-	m.cleanupEvents = stream.Events
-	return m.readCleanupStreamCmd()
-}
-
-// readCleanupStreamCmd returns a tea.Cmd that translates one event from the
-// cleanup package. The cleanup package owns all subprocess and pipe lifecycle;
-// this adapter only maps plain Go events to Bubble Tea messages.
-func (m *Model) readCleanupStreamCmd() tea.Cmd {
-	return func() tea.Msg {
-		if m.cleanupEvents == nil {
-			return nil
-		}
-		event, ok := <-m.cleanupEvents
-		if !ok {
-			return nil
-		}
-		if event.Kind == cleanup.EventDone {
-			return cleanupCompleteMsg{result: event.Done.Result, err: event.Done.Err}
-		}
-		return cleanupStreamMsg{line: event.Line}
-	}
+	return tea.Batch(m.spinner.Tick, m.operations.startScan(false))
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -262,11 +217,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expanded[i] = false
 			}
 		}
-		m.scanCancel = nil
+		m.operations.clearScan()
 		return m, nil
 
 	case scanCancelledMsg:
-		m.scanCancel = nil
+		m.operations.clearScan()
 		if m.hasPrevScan {
 			m.screen = screenDashboard
 			return m, nil
@@ -277,15 +232,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logContent += msg.line + "\n"
 		m.logVP.SetContent(m.logContent)
 		m.logVP.GotoBottom()
-		return m, m.readCleanupStreamCmd()
+		return m, m.operations.readCleanupStreamCmd()
 
 	case cleanupCompleteMsg:
 		m.logDone = true
 		m.logExit = msg.result.ExitCode
 		m.logSummary = msg.result.FreedText
 		m.logStderr = msg.result.Stderr
-		m.cleanupEvents = nil
-		m.cleanupCancel = nil
+		m.operations.clearCleanup()
 		if msg.err != nil {
 			m.logSummary = fmt.Sprintf("Error: %s", msg.err)
 			m.logExit = 1
@@ -332,17 +286,14 @@ func (m *Model) loadingView() string {
 func (m *Model) handleLoadingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, loadingKeys.Esc):
-		if m.scanCancel != nil {
-			// Cancel the running scan
-			m.scanCancel()
+		if m.operations.cancelScan() {
 			m.loadingMsg = "Cancelling…"
 			return m, nil
 		}
 		// No active scan — quit
 		return m, tea.Quit
 	case key.Matches(msg, loadingKeys.Quit):
-		if m.scanCancel != nil {
-			m.scanCancel()
+		if m.operations.cancelScan() {
 		}
 		return m, tea.Quit
 	}
@@ -551,9 +502,7 @@ func (m *Model) startCleanup() tea.Cmd {
 	if m.logVP.Height() > 0 {
 		m.logVP.SetContent("")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cleanupCancel = cancel
-	return m.cleanupCmd(ctx)
+	return m.operations.startCleanup(m.lastScanSudo)
 }
 
 func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -657,9 +606,7 @@ func (m *Model) handleLogKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.quitConfirm = true
 			// First press — warn, second press kills the cleanup subprocess
 		} else {
-			if m.cleanupCancel != nil {
-				m.cleanupCancel()
-				m.cleanupCancel = nil
+			if m.operations.cancelCleanup() {
 			}
 			return m, tea.Quit
 		}
