@@ -6,21 +6,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jellydn/mole-tui/internal/jsonrpc"
 )
 
 // TestServePing verifies a request/response round-trip without a mo binary.
 func TestServePing(t *testing.T) {
 	in := `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
 	var out bytes.Buffer
-	s := &server{out: &out, moPath: "/usr/local/bin/mo"}
-	if err := s.serve(strings.NewReader(in)); err != nil {
+	s := newServer(strings.NewReader(in), &out, "/usr/local/bin/mo", nil)
+	if err := s.transport.Serve(); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 response line, got %d: %q", len(lines), out.String())
 	}
-	var resp response
+	var resp jsonrpc.Response
 	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +42,13 @@ func TestServePing(t *testing.T) {
 func TestServeUnknownMethod(t *testing.T) {
 	in := `{"jsonrpc":"2.0","id":2,"method":"nope"}` + "\n"
 	var out bytes.Buffer
-	s := &server{out: &out, moPath: "mo"}
-	_ = s.serve(strings.NewReader(in))
-	var resp response
+	s := newServer(strings.NewReader(in), &out, "mo", nil)
+	_ = s.transport.Serve()
+	var resp jsonrpc.Response
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Error == nil || resp.Error.Code != -32601 {
+	if resp.Error == nil || resp.Error.Code != jsonrpc.CodeMethodNotFound {
 		t.Fatalf("expected -32601, got %+v", resp.Error)
 	}
 }
@@ -55,13 +57,13 @@ func TestServeUnknownMethod(t *testing.T) {
 func TestServeMalformedJSON(t *testing.T) {
 	in := "not json\n"
 	var out bytes.Buffer
-	s := &server{out: &out, moPath: "mo"}
-	_ = s.serve(strings.NewReader(in))
-	var resp response
+	s := newServer(strings.NewReader(in), &out, "mo", nil)
+	_ = s.transport.Serve()
+	var resp jsonrpc.Response
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Error == nil || resp.Error.Code != -32700 {
+	if resp.Error == nil || resp.Error.Code != jsonrpc.CodeParseError {
 		t.Fatalf("expected -32700, got %+v", resp.Error)
 	}
 }
@@ -72,8 +74,8 @@ func TestServeMalformedJSON(t *testing.T) {
 func TestServeCleanupDryRun(t *testing.T) {
 	in := `{"jsonrpc":"2.0","id":3,"method":"cleanup.start","params":{"dryRun":true}}` + "\n"
 	var out bytes.Buffer
-	s := &server{out: &out, moPath: "mo"}
-	if err := s.serve(strings.NewReader(in)); err != nil {
+	s := newServer(strings.NewReader(in), &out, "mo", nil)
+	if err := s.transport.Serve(); err != nil {
 		t.Fatal(err)
 	}
 	select {
